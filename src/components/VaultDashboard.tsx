@@ -1,0 +1,392 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { format } from "date-fns";
+import { initDb, sql, EntryRecord } from "@/lib/localDb";
+import { useDebouncedCallback } from "use-debounce";
+
+export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boolean, url: string) => void }) {
+  const [entries, setEntries] = useState<{ date: string; sha: string | null }[]>([]);
+  const [activeDate, setActiveDate] = useState<string>("");
+  const [todayStr, setTodayStr] = useState<string>("");
+  const [hasMounted, setHasMounted] = useState(false);
+  
+  const [content, setContent] = useState("");
+  const [sha, setSha] = useState<string | null>(null);
+  const [isPulling, setIsPulling] = useState(false);
+  
+  const [syncStatus, setSyncStatus] = useState<"synced" | "saving" | "error" | "unsaved">("synced");
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  
+  const [isReady, setIsReady] = useState(false);
+
+  // Set hasMounted and todayStr on mount
+  useEffect(() => {
+    setHasMounted(true);
+    const t = format(new Date(), "yyyy-MM-dd");
+    setTodayStr(t);
+    setActiveDate(t);
+  }, []);
+
+  // Initialize DB and fetch list
+  useEffect(() => {
+    let active = true;
+    async function setup() {
+      // DEBUG OPFS RAW STORAGE
+      if (typeof navigator !== "undefined" && navigator.storage) {
+        try {
+          const root = await navigator.storage.getDirectory();
+          let files = [];
+          for await (let [name, handle] of (root as any).entries()) {
+            files.push(name);
+          }
+          console.log("RAW OPFS Root Files:", files);
+        } catch (e) {
+          console.error("RAW OPFS Error:", e);
+        }
+      }
+
+      await initDb();
+      
+      // Clean ghost files and load OPFS local data instantly
+      let localEntries: {date: string, sha: string|null}[] = [];
+      try {
+        await sql`DELETE FROM entries WHERE (content = '' OR content IS NULL) AND sha IS NULL`;
+        localEntries = await sql`SELECT date, sha FROM entries ORDER BY date DESC` as {date: string, sha: string|null}[];
+        if (active) {
+          setEntries(localEntries);
+          setIsReady(true);
+        }
+      } catch (e) {
+        if (active) setIsReady(true);
+      }
+      
+      // Background sync with GitHub
+      try {
+        const res = await fetch("/api/vault/list");
+        if (res.ok && active) {
+          const data = await res.json();
+          if (onVaultLoaded) {
+            onVaultLoaded(data.vaultExists, data.githubUrl);
+          }
+          
+          const githubFiles = data.files.map((f: any) => ({ date: f.date, sha: f.sha }));
+          
+          // Merge local and GitHub
+          const merged = new Map<string, {date: string, sha: string|null}>();
+          localEntries.forEach(e => merged.set(e.date, e));
+          githubFiles.forEach((f: any) => {
+            if (!merged.has(f.date)) merged.set(f.date, f);
+            else merged.set(f.date, { ...merged.get(f.date)!, sha: f.sha });
+          });
+          
+          const newEntries = Array.from(merged.values()).sort((a,b) => b.date.localeCompare(a.date));
+          if (active) setEntries(newEntries); 
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    setup();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When activeDate changes, load from Local SQLite, fallback to GitHub
+  useEffect(() => {
+    if (!isReady) return;
+    
+    let active = true;
+    async function loadActiveEntry() {
+      if (active) setContent("Loading...");
+      
+      try {
+        const localResult = await sql`SELECT * FROM entries WHERE date = ${activeDate}`;
+        const localEntry = (localResult as EntryRecord[])[0];
+
+        if (localEntry && localEntry.content) {
+          if (active) {
+            setContent(localEntry.content);
+            setSha(localEntry.sha);
+            setLastSyncedAt(localEntry.last_synced_at);
+            setSyncStatus(localEntry.updated_at > (localEntry.last_synced_at || 0) ? "unsaved" : "synced");
+          }
+        } else {
+          const res = await fetch(`/api/vault/entry?date=${activeDate}`);
+          if (res.ok && active) {
+            const data = await res.json();
+            const fetchedContent = data.content || "";
+            const fetchedSha = data.sha || null;
+            
+            setContent(fetchedContent);
+            setSha(fetchedSha);
+            setLastSyncedAt(Date.now());
+            setSyncStatus("synced");
+
+            await sql`
+              INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+              VALUES (${activeDate}, ${fetchedContent}, ${fetchedSha}, ${Date.now()}, ${Date.now()})
+            `;
+          } else if (active) {
+            setContent("");
+            setSha(null);
+            setSyncStatus("synced");
+          }
+        }
+      } catch (e) {
+        if (active) {
+          setContent("");
+          setSyncStatus("synced");
+        }
+      }
+    }
+    loadActiveEntry();
+    return () => { active = false; };
+  }, [activeDate, isReady]);
+
+  // Handle Editor changes: Auto-save to Local SQLite ONLY
+  const autoSaveToLocalDb = useDebouncedCallback(async (text: string, currentSha: string | null) => {
+    try {
+      await sql`
+        INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+        VALUES (${activeDate}, ${text}, ${currentSha}, ${lastSyncedAt}, ${Date.now()})
+      `;
+      setEntries(prev => {
+        if (!prev.find(p => p.date === activeDate)) {
+          const fresh = [{ date: activeDate, sha: currentSha }, ...prev];
+          return fresh.sort((a,b) => b.date.localeCompare(a.date));
+        }
+        return prev;
+      });
+    } catch(e) {
+      console.error("Local SQLite save failed", e);
+    }
+  }, 200);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const text = e.target.value;
+    setContent(text);
+    setSyncStatus("unsaved");
+    autoSaveToLocalDb(text, sha);
+  };
+
+  const handlePullFromGithub = async () => {
+    setIsPulling(true);
+    try {
+      const res = await fetch(`/api/vault/entry?date=${activeDate}`);
+      if (res.ok) {
+        const data = await res.json();
+        const fetchedContent = data.content || "";
+        const fetchedSha = data.sha || null;
+        
+        setContent(fetchedContent);
+        setSha(fetchedSha);
+        setLastSyncedAt(Date.now());
+        setSyncStatus("synced");
+
+        await sql`
+          INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+          VALUES (${activeDate}, ${fetchedContent}, ${fetchedSha}, ${Date.now()}, ${Date.now()})
+        `;
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsPulling(false);
+    }
+  };
+
+  // Manual save to GitHub
+  const handlePushToGithub = async () => {
+    setSyncStatus("saving");
+    try {
+      const res = await fetch("/api/vault/entry", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: activeDate,
+          content: content,
+          sha: sha,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSha(data.sha);
+        const now = Date.now();
+        setLastSyncedAt(now);
+        setSyncStatus("synced");
+        
+        await sql`
+          INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+          VALUES (${activeDate}, ${content}, ${data.sha}, ${now}, ${now})
+        `;
+
+        // Also update the tree list's sha
+        setEntries(prev => prev.map(p => p.date === activeDate ? { ...p, sha: data.sha } : p));
+      } else {
+        setSyncStatus("error");
+      }
+    } catch (e) {
+      setSyncStatus("error");
+    }
+  };
+
+  const isLoading = !hasMounted || !isReady || content === "Loading...";
+
+  const statusDot = syncStatus === "synced" && !isPulling
+    ? "bg-emerald-400"
+    : syncStatus === "unsaved" && !isPulling
+    ? "bg-amber-400"
+    : syncStatus === "error"
+    ? "bg-red-400"
+    : "bg-neutral-400 animate-pulse";
+
+  const statusText = !hasMounted || isPulling
+    ? "Pulling..."
+    : syncStatus === "saving"
+    ? "Pushing..."
+    : syncStatus === "error"
+    ? "Sync failed"
+    : syncStatus === "unsaved"
+    ? "Local only"
+    : lastSyncedAt
+    ? `Synced ${format(lastSyncedAt, "h:mm a")}`
+    : "";
+
+  if (!hasMounted) {
+    return (
+      <div className="flex h-[600px] rounded-xl overflow-hidden bg-white dark:bg-neutral-950 border border-neutral-200/60 dark:border-neutral-800/60 animate-pulse">
+        <div className="w-[220px] border-r border-neutral-200/60 dark:border-neutral-800/60 bg-neutral-50/80 dark:bg-neutral-900/50"></div>
+        <div className="flex-1 flex flex-col">
+          <div className="h-[52px] border-b border-neutral-200/60 dark:border-neutral-800/60"></div>
+          <div className="flex-1 p-6 space-y-4">
+            <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded w-3/4"></div>
+            <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded w-full"></div>
+            <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded w-5/6"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-[600px] rounded-xl overflow-hidden bg-white dark:bg-neutral-950 shadow-[0_1px_3px_rgba(0,0,0,0.08),0_8px_24px_rgba(0,0,0,0.04)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.3),0_8px_24px_rgba(0,0,0,0.2)] border border-neutral-200/60 dark:border-neutral-800/60 transition-all">
+      {/* ── Sidebar ── */}
+      <div className="w-[220px] min-w-[220px] border-r border-neutral-200/60 dark:border-neutral-800/60 bg-neutral-50/80 dark:bg-neutral-900/50 flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200/60 dark:border-neutral-800/60">
+          <span className="text-[11px] font-semibold tracking-widest uppercase text-neutral-400 dark:text-neutral-500 select-none">
+            Entries
+          </span>
+          <button
+            onClick={() => setActiveDate(todayStr)}
+            disabled={entries.some(e => e.date === todayStr)}
+            className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 hover:opacity-90 active:scale-[0.97] transition-all disabled:opacity-20 disabled:cursor-not-allowed disabled:active:scale-100"
+          >
+            + Today
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
+          {!isReady ? (
+            <div className="space-y-1.5 p-1.5 animate-pulse">
+              {[100, 75, 88].map((w, i) => (
+                <div key={i} className="h-9 bg-neutral-200/70 dark:bg-neutral-800/70 rounded-lg" style={{ width: `${w}%` }} />
+              ))}
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-neutral-400 dark:text-neutral-600 text-xs text-center px-4 gap-1">
+              <span className="text-2xl">📝</span>
+              <span>No entries yet</span>
+              <span className="text-[10px]">Click &quot;+ Today&quot; to start</span>
+            </div>
+          ) : (
+            entries.map((entry) => {
+              const isActive = activeDate === entry.date;
+              const isToday = entry.date === todayStr;
+              return (
+                <button
+                  key={entry.date}
+                  onClick={() => setActiveDate(entry.date)}
+                  className={`group w-full text-left px-3 py-2.5 rounded-lg text-[13px] transition-all flex items-center gap-2.5 ${
+                    isActive
+                      ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-sm font-medium"
+                      : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-neutral-800/60"
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
+                    isActive ? "bg-white/60 dark:bg-neutral-900/60" : entry.sha ? "bg-emerald-400/70" : "bg-amber-400/70"
+                  }`} />
+                  <span className="truncate font-mono tracking-tight">{entry.date}</span>
+                  {isToday && (
+                    <span className={`ml-auto text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
+                      isActive ? "text-white/50 dark:text-neutral-900/50" : "text-neutral-400 dark:text-neutral-600"
+                    }`}>
+                      today
+                    </span>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* ── Editor ── */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header bar — fixed height, never wraps */}
+        <div className="shrink-0 flex items-center justify-between gap-3 px-5 h-[52px] border-b border-neutral-200/60 dark:border-neutral-800/60">
+          <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 truncate shrink-0">
+            {activeDate}
+          </h2>
+          <div className="flex items-center gap-2.5 shrink-0">
+            {/* Status pill */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot}`} />
+              <span className="text-[11px] text-neutral-400 dark:text-neutral-500 truncate max-w-[120px]">
+                {statusText}
+              </span>
+            </div>
+            {/* Action buttons */}
+            <div className="flex items-center gap-1.5 ml-1">
+              <button
+                onClick={handlePullFromGithub}
+                disabled={syncStatus === "saving" || isPulling || isLoading}
+                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-[0.97]"
+                title="Pull latest from GitHub"
+              >
+                ↓ Pull
+              </button>
+              <button
+                onClick={handlePushToGithub}
+                disabled={syncStatus === "synced" || syncStatus === "saving" || isPulling || isLoading}
+                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-[0.97] shadow-sm"
+                title="Push to GitHub"
+              >
+                ↑ Push
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Editor area */}
+        <div className="relative flex-1 min-h-0">
+          <textarea
+            style={{ width: "100%", height: "100%" }}
+            className={`absolute inset-0 px-6 py-5 bg-transparent border-none focus:outline-none focus:ring-0 resize-none font-mono text-[14px] leading-[1.75] text-neutral-700 dark:text-neutral-300 placeholder:text-neutral-300 dark:placeholder:text-neutral-700 transition-opacity duration-200 ${isLoading ? "opacity-0" : "opacity-100"}`}
+            placeholder="Start writing..."
+            value={isLoading ? "" : content}
+            onChange={handleChange}
+            disabled={isLoading}
+          />
+          {isLoading && (
+            <div className="absolute inset-0 px-6 py-5 space-y-3.5 animate-pulse pointer-events-none">
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-3/4" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-full" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-5/6" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-1/2" />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
