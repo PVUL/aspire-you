@@ -9,9 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@octokit/rest": "^22.0.1",
+    "@sqlite.org/sqlite-wasm": "^3.51.2-build8",
+    "better-auth": "^1.5.6",
+    "dotenv": "^17.4.0",
     "next": "16.2.2",
+    "octokit": "^5.0.5",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "yjs": "^13.6.30"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
