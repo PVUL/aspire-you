@@ -1,0 +1,9 @@
+{
+  "name": "aspire-you-functions",
+  "version": "1.0.0",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "@octokit/rest": "^22.0.1",
+    "express": "^4.21.0"
+  }
+}

@@ -1,40 +1,67 @@
-# Aspire You - Local-First GitHub Vault Journal
+# Aspire You — Local-First GitHub Vault Journal
 
-A decentralized journaling application that ensures you truly own your data by syncing locally authored entries to a private GitHub repository (`aspire-vault`). 
+A journaling app where you truly own your data. Entries are saved instantly to a local SQLite database in your browser, and you can manually push them to your own private GitHub repository when you're ready.
 
-## Key Features
+## How It Works
 
-1. **Local-First SQLite Database**: 
-   - Powered by [sqlocal](https://sqlocal.dallashoff.com/) (SQLite WASM utilizing the Origin Private File System).
-   - As you type, entries are auto-saved locally in real-time within your browser context. No network latency, and works completely offline.
-2. **True Data Ownership**:
-   - Behind the scenes, the ultimate source-of-truth is your own private GitHub Repository.
-   - Pushing your local SQLite changes to become GitHub Commits is an intentional, manual sync action.
-3. **Decentralized Provisioning**:
-   - Uses `better-auth` and `octokit` to securely manage authentication tokens in a proxy SQLite server.
-   - Automatically provisions an encrypted, CRDT-ready `.md` structure inside a private `aspire-vault` repository upon account creation.
+1. **Type** → auto-saved to browser SQLite immediately (no network required)
+2. **Push** → manually syncs your entries to GitHub as markdown files in `entries/`
+3. **Pull** → fetches the latest from GitHub into your local SQLite
+
+Your data lives in your browser and your GitHub. No third-party servers hold your journal content.
 
 ## Stack
-- Framework: Next.js App Router (Bun)
-- Database (Client): `sqlocal` (SQLite WASM)
-- Database (Server Config): `better-sqlite3`
-- Auth: `better-auth`
-- External Sync: GitHub API (`octokit`)
-- Styling: Tailwind CSS v4
 
----
+| Layer | Technology |
+|---|---|
+| Frontend | Vite + React + TypeScript |
+| Styling | Tailwind CSS v4 |
+| Auth | Clerk (email OTP) + Nhost (backend JWT) |
+| Client DB | `sqlocal` — SQLite WASM via OPFS |
+| Backend | Nhost Serverless Functions (Express) |
+| GitHub Sync | Octokit (`@octokit/rest`) |
 
-### Run Locally
+## Running Locally
 
-1. Create a GitHub OAuth App and grab your credentials. Set your Callback URL to `http://localhost:3000/api/auth/callback/github`
-2. Configure `.env.local`:
+### Prerequisites
+- [Nhost CLI](https://docs.nhost.io/local-development) installed
+- A [Clerk](https://clerk.com) app with email OTP enabled
+- A GitHub OAuth App (callback: `http://localhost:3000/callback`)
+
+### Setup
+
+1. Copy the environment template:
    ```bash
-   GITHUB_CLIENT_ID="..."
-   GITHUB_CLIENT_SECRET="..."
-   BETTER_AUTH_SECRET="..."
-   BETTER_AUTH_URL="http://localhost:3000"
+   cp .env.local.example .env.local
    ```
-3. Run the setup:
+
+2. Fill in your `.env.local`:
+   ```bash
+   VITE_CLERK_PUBLISHABLE_KEY="pk_test_..."
+   VITE_NHOST_SUBDOMAIN="local"
+   VITE_NHOST_REGION="local"
+   VITE_GITHUB_CLIENT_ID="..."
+   ```
+
+3. Fill in `.secrets` (for Nhost functions):
+   ```bash
+   GITHUB_CLIENT_SECRET="..."
+   NHOST_JWT_SECRET='{"type":"RS256","key":"..."}'
+   ```
+
+4. Start Nhost backend:
+   ```bash
+   nhost up
+   ```
+
+5. Start the frontend:
    ```bash
    bun run dev
    ```
+
+The app runs at `http://localhost:5173`, the Nhost backend at `http://localhost:1337`.
+
+## Docs
+
+- [Architecture Overview](docs/architecture.md)
+- [Next.js → Vite + Nhost Migration](docs/nhost-migration.md)

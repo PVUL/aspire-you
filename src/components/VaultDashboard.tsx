@@ -5,20 +5,27 @@ import { format } from "date-fns";
 import { initDb, sql, EntryRecord } from "@/lib/localDb";
 import { useDebouncedCallback } from "use-debounce";
 
+import { useNhostClient, useAccessToken } from "@nhost/react";
+import { useAuth } from "@clerk/clerk-react";
+
 export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boolean, url: string) => void }) {
+  const nhost = useNhostClient();
+  const accessToken = useAccessToken();
+  const { getToken } = useAuth();
   const [entries, setEntries] = useState<{ date: string; sha: string | null }[]>([]);
   const [activeDate, setActiveDate] = useState<string>("");
   const [todayStr, setTodayStr] = useState<string>("");
   const [hasMounted, setHasMounted] = useState(false);
-  
+
   const [content, setContent] = useState("");
   const [sha, setSha] = useState<string | null>(null);
   const [isPulling, setIsPulling] = useState(false);
-  
+
   const [syncStatus, setSyncStatus] = useState<"synced" | "saving" | "error" | "unsaved">("synced");
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
-  
+
   const [isReady, setIsReady] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null); // date string pending deletion
 
   // Set hasMounted and todayStr on mount
   useEffect(() => {
@@ -37,22 +44,21 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
         try {
           const root = await navigator.storage.getDirectory();
           let files = [];
-          for await (let [name, handle] of (root as any).entries()) {
+          for await (let [name, _] of (root as any).entries()) {
             files.push(name);
           }
-          console.log("RAW OPFS Root Files:", files);
         } catch (e) {
           console.error("RAW OPFS Error:", e);
         }
       }
 
       await initDb();
-      
+
       // Clean ghost files and load OPFS local data instantly
-      let localEntries: {date: string, sha: string|null}[] = [];
+      let localEntries: { date: string, sha: string | null }[] = [];
       try {
         await sql`DELETE FROM entries WHERE (content = '' OR content IS NULL) AND sha IS NULL`;
-        localEntries = await sql`SELECT date, sha FROM entries ORDER BY date DESC` as {date: string, sha: string|null}[];
+        localEntries = await sql`SELECT date, sha FROM entries ORDER BY date DESC` as { date: string, sha: string | null }[];
         if (active) {
           setEntries(localEntries);
           setIsReady(true);
@@ -60,28 +66,37 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
       } catch (e) {
         if (active) setIsReady(true);
       }
-      
+
       // Background sync with GitHub
       try {
-        const res = await fetch("/api/vault/list");
+        const token = accessToken || await getToken();
+        if (!token) return;
+
+        const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+        const res = await fetch(`${backendUrl}/vault/list`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+          }
+        });
         if (res.ok && active) {
           const data = await res.json();
           if (onVaultLoaded) {
             onVaultLoaded(data.vaultExists, data.githubUrl);
           }
-          
+
           const githubFiles = data.files.map((f: any) => ({ date: f.date, sha: f.sha }));
-          
+
           // Merge local and GitHub
-          const merged = new Map<string, {date: string, sha: string|null}>();
+          const merged = new Map<string, { date: string, sha: string | null }>();
           localEntries.forEach(e => merged.set(e.date, e));
           githubFiles.forEach((f: any) => {
             if (!merged.has(f.date)) merged.set(f.date, f);
             else merged.set(f.date, { ...merged.get(f.date)!, sha: f.sha });
           });
-          
-          const newEntries = Array.from(merged.values()).sort((a,b) => b.date.localeCompare(a.date));
-          if (active) setEntries(newEntries); 
+
+          const newEntries = Array.from(merged.values()).sort((a, b) => b.date.localeCompare(a.date));
+          if (active) setEntries(newEntries);
         }
       } catch (e) {
         // ignore
@@ -89,17 +104,16 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
     }
     setup();
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [nhost, accessToken, onVaultLoaded]); // listen to accessToken specifically
 
   // When activeDate changes, load from Local SQLite, fallback to GitHub
   useEffect(() => {
     if (!isReady) return;
-    
+
     let active = true;
     async function loadActiveEntry() {
       if (active) setContent("Loading...");
-      
+
       try {
         const localResult = await sql`SELECT * FROM entries WHERE date = ${activeDate}`;
         const localEntry = (localResult as EntryRecord[])[0];
@@ -112,12 +126,23 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
             setSyncStatus(localEntry.updated_at > (localEntry.last_synced_at || 0) ? "unsaved" : "synced");
           }
         } else {
-          const res = await fetch(`/api/vault/entry?date=${activeDate}`);
+          const token = accessToken || await getToken();
+          if (!token) return;
+
+          const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+          const res = await fetch(`${backendUrl}/vault/entry`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ date: activeDate })
+          });
           if (res.ok && active) {
             const data = await res.json();
             const fetchedContent = data.content || "";
             const fetchedSha = data.sha || null;
-            
+
             setContent(fetchedContent);
             setSha(fetchedSha);
             setLastSyncedAt(Date.now());
@@ -142,7 +167,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
     }
     loadActiveEntry();
     return () => { active = false; };
-  }, [activeDate, isReady]);
+  }, [activeDate, isReady, nhost, accessToken]);
 
   // Handle Editor changes: Auto-save to Local SQLite ONLY
   const autoSaveToLocalDb = useDebouncedCallback(async (text: string, currentSha: string | null) => {
@@ -154,11 +179,11 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
       setEntries(prev => {
         if (!prev.find(p => p.date === activeDate)) {
           const fresh = [{ date: activeDate, sha: currentSha }, ...prev];
-          return fresh.sort((a,b) => b.date.localeCompare(a.date));
+          return fresh.sort((a, b) => b.date.localeCompare(a.date));
         }
         return prev;
       });
-    } catch(e) {
+    } catch (e) {
       console.error("Local SQLite save failed", e);
     }
   }, 200);
@@ -171,14 +196,24 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
   };
 
   const handlePullFromGithub = async () => {
+    const token = accessToken || await getToken();
+    if (!token) return alert("Not authenticated");
     setIsPulling(true);
     try {
-      const res = await fetch(`/api/vault/entry?date=${activeDate}`);
+      const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+      const res = await fetch(`${backendUrl}/vault/entry`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ date: activeDate })
+      });
       if (res.ok) {
         const data = await res.json();
         const fetchedContent = data.content || "";
         const fetchedSha = data.sha || null;
-        
+
         setContent(fetchedContent);
         setSha(fetchedSha);
         setLastSyncedAt(Date.now());
@@ -196,33 +231,78 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
     }
   };
 
+  // Delete entry from local SQLite + GitHub
+  const handleDeleteEntry = async (date: string) => {
+    const token = accessToken || await getToken();
+    const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+
+    // Delete from local SQLite
+    try {
+      await sql`DELETE FROM entries WHERE date = ${date}`;
+    } catch (e) {
+      console.error("Failed to delete from local SQLite", e);
+    }
+
+    // Delete from GitHub if it has a sha (means it's been pushed)
+    const entry = entries.find(e => e.date === date);
+    if (entry?.sha && token) {
+      try {
+        await fetch(`${backendUrl}/vault/entry`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, sha: entry.sha }),
+        });
+      } catch (e) {
+        console.error("Failed to delete from GitHub", e);
+      }
+    }
+
+    // Update local state
+    setEntries(prev => prev.filter(e => e.date !== date));
+    setDeleteConfirm(null);
+    if (activeDate === date) {
+      const remaining = entries.filter(e => e.date !== date);
+      setActiveDate(remaining[0]?.date ?? todayStr);
+    }
+  };
+
   // Manual save to GitHub
   const handlePushToGithub = async () => {
+    const token = accessToken || await getToken();
+    if (!token) return alert("Not authenticated");
     setSyncStatus("saving");
     try {
-      const res = await fetch("/api/vault/entry", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+      const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+      const res = await fetch(`${backendUrl}/vault/entry`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           date: activeDate,
           content: content,
           sha: sha,
-        }),
+        })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setSha(data.sha);
-        const now = Date.now();
-        setLastSyncedAt(now);
-        setSyncStatus("synced");
-        
-        await sql`
-          INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
-          VALUES (${activeDate}, ${content}, ${data.sha}, ${now}, ${now})
-        `;
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setSha(data.sha);
+          const now = Date.now();
+          setLastSyncedAt(now);
+          setSyncStatus("synced");
 
-        // Also update the tree list's sha
-        setEntries(prev => prev.map(p => p.date === activeDate ? { ...p, sha: data.sha } : p));
+          await sql`
+            INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+            VALUES (${activeDate}, ${content}, ${data.sha}, ${now}, ${now})
+          `;
+
+          // Also update the tree list's sha
+          setEntries(prev => prev.map(p => p.date === activeDate ? { ...p, sha: data.sha } : p));
+        } else {
+          setSyncStatus("error");
+        }
       } else {
         setSyncStatus("error");
       }
@@ -236,22 +316,22 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
   const statusDot = syncStatus === "synced" && !isPulling
     ? "bg-emerald-400"
     : syncStatus === "unsaved" && !isPulling
-    ? "bg-amber-400"
-    : syncStatus === "error"
-    ? "bg-red-400"
-    : "bg-neutral-400 animate-pulse";
+      ? "bg-amber-400"
+      : syncStatus === "error"
+        ? "bg-red-400"
+        : "bg-neutral-400 animate-pulse";
 
   const statusText = !hasMounted || isPulling
     ? "Pulling..."
     : syncStatus === "saving"
-    ? "Pushing..."
-    : syncStatus === "error"
-    ? "Sync failed"
-    : syncStatus === "unsaved"
-    ? "Local only"
-    : lastSyncedAt
-    ? `Synced ${format(lastSyncedAt, "h:mm a")}`
-    : "";
+      ? "Pushing..."
+      : syncStatus === "error"
+        ? "Sync failed"
+        : syncStatus === "unsaved"
+          ? "Local only"
+          : lastSyncedAt
+            ? `Synced ${format(lastSyncedAt, "h:mm a")}`
+            : "";
 
   if (!hasMounted) {
     return (
@@ -302,28 +382,55 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
             entries.map((entry) => {
               const isActive = activeDate === entry.date;
               const isToday = entry.date === todayStr;
+              const isPendingDelete = deleteConfirm === entry.date;
+
+              if (isPendingDelete) {
+                return (
+                  <div key={entry.date} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60">
+                    <span className="text-[11px] text-red-600 dark:text-red-400 font-medium flex-1 truncate">Delete {entry.date}?</span>
+                    <button
+                      onClick={() => handleDeleteEntry(entry.date)}
+                      className="text-[10px] font-semibold px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 active:scale-95 transition-all shrink-0"
+                    >Yes</button>
+                    <button
+                      onClick={() => setDeleteConfirm(null)}
+                      className="text-[10px] font-semibold px-2 py-1 rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:opacity-80 active:scale-95 transition-all shrink-0"
+                    >No</button>
+                  </div>
+                );
+              }
+
               return (
-                <button
+                <div
                   key={entry.date}
-                  onClick={() => setActiveDate(entry.date)}
-                  className={`group w-full text-left px-3 py-2.5 rounded-lg text-[13px] transition-all flex items-center gap-2.5 ${
-                    isActive
+                  className={`group w-full text-left px-3 py-2.5 rounded-lg text-[13px] transition-all flex items-center gap-2.5 ${isActive
                       ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-sm font-medium"
                       : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-neutral-800/60"
-                  }`}
+                    }`}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${
-                    isActive ? "bg-white/60 dark:bg-neutral-900/60" : entry.sha ? "bg-emerald-400/70" : "bg-amber-400/70"
-                  }`} />
-                  <span className="truncate font-mono tracking-tight">{entry.date}</span>
-                  {isToday && (
-                    <span className={`ml-auto text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
-                      isActive ? "text-white/50 dark:text-neutral-900/50" : "text-neutral-400 dark:text-neutral-600"
-                    }`}>
-                      today
-                    </span>
-                  )}
-                </button>
+                  <button className="flex-1 flex items-center gap-2.5 min-w-0" onClick={() => setActiveDate(entry.date)}>
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${isActive ? "bg-white/60 dark:bg-neutral-900/60" : entry.sha ? "bg-emerald-400/70" : "bg-amber-400/70"
+                      }`} />
+                    <span className="truncate font-mono tracking-tight">{entry.date}</span>
+                    {isToday && (
+                      <span className={`ml-auto text-[10px] font-semibold uppercase tracking-wider shrink-0 ${isActive ? "text-white/50 dark:text-neutral-900/50" : "text-neutral-400 dark:text-neutral-600"
+                        }`}>today</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeleteConfirm(entry.date); }}
+                    className={`shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60 ${isActive ? "text-white/40 hover:text-white/70" : "text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+                      }`}
+                    title="Delete entry"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6M14 11v6" />
+                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                    </svg>
+                  </button>
+                </div>
               );
             })
           )}

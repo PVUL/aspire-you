@@ -21,15 +21,21 @@ export function SqliteDebugPanel() {
   const [isOpen, setIsOpen] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [tables, setTables] = useState<string[]>([]);
-  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [selectedTable, setSelectedTable] = useState<string | null>("entries");
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<QueryResult | null>(null);
-  const [activeTab, setActiveTab] = useState<"browser" | "query" | "network">("browser");
+  const [activeTab, setActiveTab] = useState<"Browser SQLite" | "Network">("Browser SQLite");
   const [isLoading, setIsLoading] = useState(false);
   const [queryHistory, setQueryHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [apiCalls, setApiCalls] = useState<ApiCall[]>([]);
   const [selectedCall, setSelectedCall] = useState<ApiCall | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
+
+  const visibleCallCount = showSessions
+    ? apiCalls.length
+    : apiCalls.filter(c => !c.url.includes("session")).length;
 
   const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const queryInputRef = useRef<HTMLTextAreaElement>(null);
@@ -44,15 +50,24 @@ export function SqliteDebugPanel() {
     }
   }, []);
 
-  useEffect(() => {
-    if (isOpen) loadTables();
-  }, [isOpen, loadTables]);
+
 
   useEffect(() => {
     fetchInterceptor.install();
     const unsub = fetchInterceptor.subscribe(setApiCalls);
     return () => { unsub(); };
   }, []);
+
+  // Auto-select the most recent visible call when on the Network tab
+  useEffect(() => {
+    if (activeTab !== "Network") return;
+    const visible = showSessions
+      ? apiCalls
+      : apiCalls.filter(c => !c.url.includes("session"));
+    if (visible.length > 0) {
+      setSelectedCall(visible[visible.length - 1]);
+    }
+  }, [activeTab, apiCalls, showSessions]);
 
   // Browse table
   const browseTable = useCallback(async (tableName: string) => {
@@ -70,6 +85,15 @@ export function SqliteDebugPanel() {
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      loadTables();
+      if (selectedTable === "entries" && !result) {
+        browseTable("entries");
+      }
+    }
+  }, [isOpen, loadTables, browseTable, selectedTable, result]);
 
   // Run SQL query
   const runQuery = useCallback(async (q?: string) => {
@@ -113,21 +137,44 @@ export function SqliteDebugPanel() {
   // Drag to resize
   const onDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    dragRef.current = { startY: e.clientY, startHeight: height };
+    setIsDragging(true);
+    
+    // If we're dragging from a closed state, the real starting height is the collapsed bar height (28px)
+    const currentStartH = isOpen ? height : 28;
+    dragRef.current = { startY: e.clientY, startHeight: currentStartH };
+    
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current) return;
       const delta = dragRef.current.startY - ev.clientY;
       const newH = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, dragRef.current.startHeight + delta));
       setHeight(newH);
+      
+      // If we crossed a small upward threshold while collapsed, explicitly open the drawer
+      if (!isOpen && delta > 10) {
+        setIsOpen(true);
+      }
     };
-    const onUp = () => {
+    
+    const onUp = (ev: MouseEvent) => {
+      if (dragRef.current) {
+        const delta = dragRef.current.startY - ev.clientY;
+        const newH = dragRef.current.startHeight + delta;
+        
+        // If dragged very far down, treat as 'manually collapsed'
+        if (newH < 120) {
+          setIsOpen(false);
+          setHeight(DEFAULT_HEIGHT); // Reset internal height for next open
+        }
+      }
       dragRef.current = null;
+      setIsDragging(false);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
+    
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [height]);
+  }, [height, isOpen]);
 
   // Keyboard shortcuts in query input
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -153,163 +200,147 @@ export function SqliteDebugPanel() {
     return String(val);
   };
 
+  const actualHeight = isOpen ? height : 28; // Toggle bar is 28px thick
+  
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[9999] font-mono text-[12px]" style={{ userSelect: dragRef.current ? "none" : "auto" }}>
-      {/* ── Collapsed bar ── */}
-      {!isOpen && (
-        <div className="flex items-center justify-between px-4 h-9 bg-[#1c1c1c] border-t border-[#3a3a3a] cursor-pointer select-none"
-          onClick={() => setIsOpen(true)}>
-          <div className="flex items-center gap-3 text-[#a0a0a0]">
-            <span className="text-[10px] border border-[#333] px-1.5 py-0.5 rounded text-[#60a5fa] border-[#283060]">DEV</span>
-            <span className="text-[11px]">Devtools</span>
-            <span className="text-[10px] text-[#6e6e6e]">{tables.length} tables · {apiCalls.length} requests</span>
+    <div 
+      className={`fixed bottom-0 left-0 right-0 z-[9999] font-mono text-[12px] bg-[#1c1c1c] border-t border-[#3a3a3a] flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.4)] ${isDragging ? "" : "transition-[height] duration-400 ease-[cubic-bezier(0.2,0.8,0.2,1)]"}`}
+      style={{ height: actualHeight, userSelect: isDragging ? "none" : "auto" }}
+    >
+      {/* ── Drag Handle (Absolute Top Edge) ── */}
+      <div
+        className="absolute top-0 left-0 right-0 h-2 -translate-y-px cursor-ns-resize z-50 flex justify-center group pointer-events-auto"
+        onMouseDown={onDragStart}
+      >
+        <div className="w-12 h-[3px] rounded-b-md transition-colors bg-[#333] group-hover:bg-[#3b82f6]" />
+      </div>
+
+      {/* ── Persistent Toggle Bar ── */}
+      <div 
+        className="flex items-center justify-between px-5 h-7 shrink-0 cursor-pointer select-none hover:bg-[#252525] transition-colors group relative border-b border-transparent data-[open=true]:border-[#2a2a2a]"
+        data-open={isOpen}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <div className="flex items-center h-full text-[#8e8e8e]">
+          <span className={`text-[10px] font-mono font-bold tracking-widest uppercase mr-3 leading-none pb-px transition-colors ${isOpen ? "text-[#d4d4d4]" : "text-[#5e5e5e]"}`}>
+            devtools
+          </span>
+          
+          <div className="w-px h-3 bg-[#3a3a3a] mr-3" />
+          
+          <div className="flex items-center gap-1">
+            {(["Browser SQLite", "Network"] as const).map((tab) => (
+              <button key={tab} onClick={(e) => { e.stopPropagation(); setActiveTab(tab); if (!isOpen) setIsOpen(true); }}
+                className={`text-[10px] font-mono px-2 h-5 rounded transition-all tracking-wide uppercase leading-none flex items-center ${
+                  activeTab === tab
+                    ? isOpen
+                      ? "bg-[#282828] text-[#e5e5e5] shadow-sm"
+                      : "bg-[#202020] text-[#7e7e7e]"
+                    : "text-[#6e6e6e] hover:text-[#a0a0a0] hover:bg-[#202020]"
+                }`}>
+                {tab}
+                {tab === "Network" && visibleCallCount > 0 && (
+                  <span className={`ml-1.5 text-[9px] px-1 rounded-full transition-colors ${
+                    isOpen ? "bg-[#283060] text-[#60a5fa]" : "bg-[#2a2a2a] text-[#5e5e5e]"
+                  }`}>{visibleCallCount}</span>
+                )}
+              </button>
+            ))}
           </div>
-          <span className="text-[#5e5e5e] text-[10px]">▴</span>
         </div>
-      )}
 
-      {/* ── Expanded panel ── */}
-      {isOpen && (
-        <div className="flex flex-col bg-[#1c1c1c] border-t border-[#3a3a3a] overflow-hidden"
-          style={{ height }}>
-          {/* Drag handle */}
-          <div
-            className="h-1 cursor-ns-resize hover:bg-[#3b82f6] transition-colors flex-shrink-0 group"
-            style={{ background: "transparent" }}
-            onMouseDown={onDragStart}
-          >
-            <div className="mx-auto mt-0.5 w-12 h-0.5 rounded-full bg-[#444] group-hover:bg-[#3b82f6] transition-colors" />
+        <div className="flex items-center h-full pr-1">
+          <div className={`text-[#e5e5e5] transition-transform duration-300 flex items-center justify-center ${isOpen ? "rotate-180" : ""}`}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m18 15-6-6-6 6"/>
+            </svg>
           </div>
+        </div>
+      </div>
 
-          {/* Header */}
-          <div className="flex items-center px-3 py-2 border-b border-[#303030] shrink-0 gap-4">
-            {/* Brand */}
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[10px] border border-[#283060] px-1.5 py-0.5 rounded text-[#60a5fa]">DEV</span>
-              <span className="text-[11px] text-[#6e6e6e] font-semibold tracking-wide uppercase">Devtools</span>
-            </div>
-            <div className="w-px h-4 bg-[#2a2a2a]" />
-            {/* Tabs — left aligned */}
-            <div className="flex items-center gap-1 flex-1">
-              {(["browser", "query", "network"] as const).map((tab) => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
-                  className={`text-[10px] px-2.5 py-1 rounded transition-colors font-semibold tracking-wide uppercase ${
-                    activeTab === tab
-                      ? "bg-[#282828] text-[#e5e5e5]"
-                      : "text-[#6e6e6e] hover:text-[#a0a0a0]"
-                  }`}>
-                  {tab}{tab === "network" && apiCalls.length > 0 && (
-                    <span className="ml-1 text-[9px] bg-[#283060] text-[#60a5fa] px-1 py-0.5 rounded">{apiCalls.length}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {/* Close */}
-            <button onClick={() => setIsOpen(false)}
-              className="text-[#6e6e6e] hover:text-[#e5e5e5] transition-colors px-1 shrink-0">✕</button>
-          </div>
+      {/* ── Expanded Content Area ── */}
+      <div className={`flex flex-col flex-1 overflow-hidden relative transition-opacity duration-300 ${isOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
 
-          {/* Body */}
-          <div className="flex flex-1 overflow-hidden">
-            {/* Sidebar — tables */}
-            <div className="w-48 border-r border-[#303030] flex flex-col overflow-hidden flex-shrink-0">
-              <div className="flex items-center justify-between px-3 py-2 border-b border-[#3a3a3a]">
+        {/* Body Area */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Sidebar — tables */}
+          {activeTab === "Browser SQLite" && (
+            <div className="w-48 border-r border-[#303030] flex flex-col overflow-hidden shrink-0 bg-[#1c1c1c]">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#3a3a3a]">
                 <span className="text-[10px] text-[#6e6e6e] uppercase tracking-wider font-semibold">Tables</span>
-                <button onClick={loadTables}
-                  className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors">↻</button>
+                <button onClick={loadTables} className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors">↻</button>
               </div>
               <div className="flex-1 overflow-y-auto">
                 {tables.length === 0 ? (
-                  <div className="px-3 py-3 text-[#5e5e5e] text-[11px]">No tables found</div>
+                  <div className="px-4 py-3 text-[#5e5e5e] text-[11px]">No tables found</div>
                 ) : (
                   tables.map((t) => (
-                    <button key={t} onClick={() => { setActiveTab("browser"); browseTable(t); }}
-                      className={`w-full text-left px-3 py-2 text-[11px] transition-colors flex items-center gap-2 ${
+                    <button key={t} onClick={() => { browseTable(t); }}
+                      className={`w-full text-left px-4 py-2.5 text-[11px] transition-colors flex items-center gap-2 ${
                         selectedTable === t
-                          ? "bg-[#1e3360] text-[#60a5fa]"
-                          : "text-[#a0a0a0] hover:bg-[#232323] hover:text-[#ccc]"
+                          ? "bg-[#1e3360] text-[#60a5fa] border-l-2 border-[#3b82f6]"
+                          : "text-[#a0a0a0] hover:bg-[#252525] hover:text-[#ccc] border-l-2 border-transparent"
                       }`}>
-                      <span className="text-[9px] text-[#5e5e5e]">⊞</span>
-                      <span className="truncate">{t}</span>
+                      <span className="text-[10px] text-[#5e5e5e]">⊞</span>
+                      <span className="truncate w-full">{t}</span>
                     </button>
                   ))
                 )}
               </div>
             </div>
+          )}
 
-            {/* Main area */}
-            <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Query tab */}
-              {activeTab === "query" && (
-                <div className="flex flex-col h-full">
-                  <div className="relative flex-shrink-0 border-b border-[#303030]">
-                    <textarea
-                      ref={queryInputRef}
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      placeholder="SELECT * FROM entries LIMIT 10  — ⌘↵ to run, Alt↑↓ for history"
-                      className="w-full bg-transparent text-[12px] text-[#c9d1d9] placeholder:text-[#5e5e5e] px-4 py-3 resize-none focus:outline-none"
-                      style={{ minHeight: 80, maxHeight: 160, height: 80 }}
-                      rows={3}
-                      spellCheck={false}
-                    />
-                    <div className="absolute right-3 bottom-3 flex items-center gap-2">
-                      <span className="text-[10px] text-[#5e5e5e]">⌘↵</span>
-                      <button
-                        onClick={() => runQuery()}
-                        disabled={isLoading || !query.trim()}
-                        className="text-[10px] font-semibold px-2.5 py-1 bg-[#1d4ed8] text-white rounded disabled:opacity-30 hover:bg-[#2563eb] transition-colors"
-                      >
-                        {isLoading ? "..." : "Run"}
-                      </button>
-                    </div>
+          {/* Main Content Renderers */}
+          <div className="flex-1 flex flex-col overflow-hidden bg-[#181818]">
+            {activeTab === "Network" && (
+              <NetworkPane
+                calls={apiCalls}
+                selected={selectedCall}
+                onSelect={setSelectedCall}
+                onClear={() => { setApiCalls([]); setSelectedCall(null); }}
+                showSessions={showSessions}
+                onToggleSessions={() => setShowSessions(s => !s)}
+              />
+            )}
+
+            {activeTab === "Browser SQLite" && (
+              <div className="flex flex-col h-full relative">
+                <div className="relative flex-shrink-0 border-b border-[#303030] bg-[#1c1c1c]">
+                  <textarea
+                    ref={queryInputRef}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="SELECT * FROM entries LIMIT 10  — ⌘↵ to run, Alt↑↓ for history"
+                    className="w-full bg-transparent text-[12px] text-[#c9d1d9] placeholder:text-[#5e5e5e] px-4 py-4 resize-none focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[#3b82f6]/20"
+                    style={{ minHeight: 70, maxHeight: 180, height: 70 }}
+                    rows={2}
+                    spellCheck={false}
+                  />
+                  <div className="absolute right-4 bottom-3 flex items-center gap-2">
+                    <span className="text-[10px] text-[#5e5e5e]">⌘↵</span>
+                    <button
+                      onClick={() => runQuery()}
+                      disabled={isLoading || !query.trim()}
+                      className="text-[11px] font-semibold px-3 py-1 bg-[#1d4ed8] text-white rounded disabled:opacity-30 hover:bg-[#2563eb] transition-colors shadow-sm"
+                    >
+                      {isLoading ? "Ext..." : "Run Query"}
+                    </button>
                   </div>
+                </div>
+                
+                {(!selectedTable && !query.trim() && !result) ? (
+                  <div className="flex-1 flex items-center justify-center text-[#5e5e5e] text-[11px] bg-[#181818]">
+                    Select a table from the sidebar or write a query
+                  </div>
+                ) : (
                   <ResultPane result={result} isLoading={isLoading} onExportJSON={exportJSON} onExportCSV={exportCSV} formatCell={formatCell} />
-                </div>
-              )}
-
-              {activeTab === "network" && (
-                <NetworkPane
-                  calls={apiCalls}
-                  selected={selectedCall}
-                  onSelect={setSelectedCall}
-                  onClear={() => { fetchInterceptor.clear(); setSelectedCall(null); }}
-                />
-              )}
-
-              {/* Browser tab */}
-              {activeTab === "browser" && (
-                <div className="flex flex-col h-full">
-                  {!selectedTable ? (
-                    <div className="flex-1 flex items-center justify-center text-[#5e5e5e] text-[11px]">
-                      Select a table from the sidebar
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between px-3 py-2 border-b border-[#3a3a3a] flex-shrink-0">
-                        <span className="text-[#6e6e6e]">
-                          <span className="text-[#60a5fa]">{selectedTable}</span>
-                          {result && !result.error && (
-                            <span className="ml-2 text-[#5e5e5e]">— {result.rows.length} rows in {result.duration}ms</span>
-                          )}
-                        </span>
-                        <div className="flex gap-2">
-                          <button onClick={() => browseTable(selectedTable)}
-                            className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors px-2">↻</button>
-                          <button onClick={() => { setActiveTab("query"); queryInputRef.current?.focus(); }}
-                            className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors px-2">Edit SQL</button>
-                        </div>
-                      </div>
-                      <ResultPane result={result} isLoading={isLoading} onExportJSON={exportJSON} onExportCSV={exportCSV} formatCell={formatCell} />
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -438,14 +469,34 @@ function shortUrl(url: string) {
 }
 
 function NetworkPane({
-  calls, selected, onSelect, onClear,
+  calls, selected, onSelect, onClear, showSessions, onToggleSessions,
 }: {
   calls: ApiCall[];
   selected: ApiCall | null;
   onSelect: (c: ApiCall) => void;
   onClear: () => void;
+  showSessions: boolean;
+  onToggleSessions: () => void;
 }) {
   const [detailTab, setDetailTab] = useState<"response" | "request" | "headers">("response");
+
+  const filteredCalls = calls.filter((c) => showSessions || !c.url.includes("session"));
+
+  // Group consecutive identical requests
+  const groupedCalls: (ApiCall & { count: number; groupIds: string[] })[] = [];
+  filteredCalls.forEach(call => {
+    const last = groupedCalls[groupedCalls.length - 1];
+    if (last && last.method === call.method && last.url === call.url && Math.abs(last.startedAt - call.startedAt) < 2000) {
+      last.count += 1;
+      last.groupIds.push(call.id);
+      // keep the latest status/duration for the group
+      last.status = call.status ?? last.status;
+      last.duration = call.duration ?? last.duration;
+      last.responseBody = call.responseBody ?? last.responseBody;
+    } else {
+      groupedCalls.push({ ...call, count: 1, groupIds: [call.id] });
+    }
+  });
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -453,43 +504,76 @@ function NetworkPane({
       <div className="w-[280px] min-w-[280px] border-r border-[#303030] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2a2a] shrink-0">
           <span className="text-[10px] text-[#6e6e6e] uppercase tracking-wider font-semibold">
-            {calls.length} requests
+            {filteredCalls.length} requests
           </span>
-          <button onClick={onClear}
-            className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors border border-[#333] px-1.5 py-0.5 rounded">
-            Clear
-          </button>
+          <div className="flex gap-2 items-center">
+            <button onClick={onToggleSessions}
+              className={`text-[10px] px-1.5 py-1 rounded transition-colors border flex items-center gap-1 leading-none ${
+                showSessions 
+                  ? "border-[#4a4a4a] text-[#a0a0a0] bg-[#2a2a2a]" 
+                  : "border-[#333] text-[#6e6e6e] hover:text-[#a0a0a0] bg-[#181818]"
+              }`}>
+              {showSessions ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                  <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                  <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                  <line x1="2" y1="2" x2="22" y2="22" />
+                </svg>
+              )}
+              <span>Sessions</span>
+            </button>
+            <button onClick={onClear}
+              className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors border border-[#333] px-1.5 py-0.5 rounded">
+              Clear
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {calls.length === 0 ? (
+          {filteredCalls.length === 0 ? (
             <div className="flex items-center justify-center h-full text-[#5e5e5e] text-[11px]">
               No requests yet
             </div>
           ) : (
-            calls.map((call) => (
-              <button key={call.id} onClick={() => onSelect(call)}
-                className={`w-full text-left px-3 py-2.5 border-b border-[#232323] transition-colors ${
-                  selected?.id === call.id
-                    ? "bg-[#1e3360] border-l-2 border-l-[#60a5fa]"
-                    : "hover:bg-[#232323]"
-                }`}>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className={`text-[10px] font-bold shrink-0 ${methodColor(call.method)}`}>
-                    {call.method}
-                  </span>
-                  <span className={`text-[10px] font-semibold shrink-0 ${statusColor(call.status)}`}>
-                    {call.status ?? (call.error ? "ERR" : "…")}
-                  </span>
-                  {call.duration != null && (
-                    <span className="text-[10px] text-[#5e5e5e] ml-auto shrink-0">{call.duration}ms</span>
+            groupedCalls.map((call) => {
+              const isSelected = selected && call.groupIds.includes(selected.id);
+              return (
+                <button key={call.id} onClick={() => onSelect(call)}
+                  className={`w-full text-left px-3 py-2.5 border-b border-[#232323] transition-colors relative ${
+                    isSelected
+                      ? "bg-[#1e3360] border-l-2 border-l-[#60a5fa]"
+                      : "hover:bg-[#232323]"
+                  }`}>
+                  
+                  {call.count > 1 && (
+                    <div className="absolute right-2 top-2 text-[9px] font-bold bg-[#3b82f6]/20 text-[#60a5fa] px-1.5 py-0.5 rounded-full">
+                      x{call.count}
+                    </div>
                   )}
-                </div>
-                <div className="text-[11px] text-[#a0a0a0] truncate">{shortUrl(call.url)}</div>
-                <div className="text-[10px] text-[#5e5e5e] mt-0.5">
-                  {new Date(call.startedAt).toLocaleTimeString()}
-                </div>
-              </button>
-            ))
+
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className={`text-[10px] font-bold shrink-0 ${methodColor(call.method)}`}>
+                      {call.method}
+                    </span>
+                    <span className={`text-[10px] font-semibold shrink-0 ${statusColor(call.status)}`}>
+                      {call.status ?? (call.error ? "ERR" : "…")}
+                    </span>
+                    {call.duration != null && (
+                      <span className="text-[10px] text-[#5e5e5e] ml-auto shrink-0">{call.duration}ms</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-[#a0a0a0] truncate">{shortUrl(call.url)}</div>
+                  <div className="text-[10px] text-[#5e5e5e] mt-0.5">
+                    {new Date(call.startedAt).toLocaleTimeString()}
+                  </div>
+                </button>
+              );
+            })
           )}
         </div>
       </div>
