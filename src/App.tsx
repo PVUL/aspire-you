@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
+import Communities from "./pages/Communities";
 import { SqliteDebugPanel } from "./components/SqliteDebugPanel";
 import { PasswordGate } from "./components/PasswordGate";
 
@@ -9,6 +10,7 @@ function AppRoutes() {
     <>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/communities" element={<Communities />} />
       </Routes>
       {import.meta.env.DEV && <SqliteDebugPanel />}
     </>

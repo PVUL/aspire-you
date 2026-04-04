@@ -144,3 +144,6 @@ class FetchInterceptor {
 }
 
 export const fetchInterceptor = new FetchInterceptor();
+if (typeof window !== "undefined" && import.meta.env.DEV) {
+  fetchInterceptor.install();
+}

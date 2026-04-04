@@ -1,0 +1,30 @@
+table:
+  name: values
+  schema: public
+insert_permissions:
+  - role: user
+    permission:
+      check: {}
+      columns:
+        - core_term
+        - description
+        - applicable_to
+select_permissions:
+  - role: public
+    permission:
+      columns:
+        - id
+        - core_term
+        - description
+        - applicable_to
+        - created_at
+      filter: {}
+  - role: user
+    permission:
+      columns:
+        - id
+        - core_term
+        - description
+        - applicable_to
+        - created_at
+      filter: {}

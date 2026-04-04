@@ -1,0 +1,16 @@
+table:
+  name: community_members
+  schema: public
+select_permissions:
+  - role: user
+    permission:
+      columns:
+        - edge_id
+        - user_id
+        - community_id
+        - joined_at
+        - metadata
+      filter:
+        user_id:
+          _eq: X-Hasura-User-Id
+    comment: Users can see their own memberships

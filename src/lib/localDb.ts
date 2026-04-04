@@ -30,6 +30,15 @@ export async function initDb() {
       updated_at INTEGER
     )
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS local_communities (
+      slug TEXT PRIMARY KEY,
+      content TEXT,
+      sha TEXT,
+      last_synced_at INTEGER,
+      updated_at INTEGER
+    )
+  `;
 }
 
 export type EntryRecord = {

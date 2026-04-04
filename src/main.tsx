@@ -1,3 +1,4 @@
+import "./lib/devFetchInterceptor";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { NhostClient, NhostProvider } from "@nhost/react";

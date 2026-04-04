@@ -15,7 +15,7 @@ function Toast({ message, type, onDismiss }: { message: string; type: ToastType;
     success: "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300",
   };
   return (
-    <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg w-[min(calc(100vw-2rem),24rem)] text-[13px] ${colors[type]}`}>
+    <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-100 flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg w-[min(calc(100vw-2rem),24rem)] text-[13px] ${colors[type]}`}>
       <span className="flex-1 leading-relaxed">{message}</span>
       <button onClick={onDismiss} className="shrink-0 opacity-50 hover:opacity-100 transition-opacity text-xs mt-0.5">✕</button>
     </div>
@@ -432,6 +432,9 @@ export default function Home() {
               <span className="text-[13px] text-neutral-600 dark:text-neutral-400 hidden sm:block">
                 {user?.displayName || user?.email}
               </span>
+              <a href="/communities" className="text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white transition-all text-decoration-none">
+                Communities
+              </a>
               <button
                 onClick={() => signOut()}
                 className="text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-neutral-200 dark:border-neutral-600 text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:border-neutral-400 dark:hover:border-neutral-500 transition-all active:scale-[0.97]"

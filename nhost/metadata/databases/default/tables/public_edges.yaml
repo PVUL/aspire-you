@@ -1,0 +1,48 @@
+table:
+  name: edges
+  schema: public
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        source_id:
+          _eq: X-Hasura-User-Id
+      set:
+        source_id: X-Hasura-User-Id
+      columns:
+        - source_id
+        - target_id
+        - type
+        - start_date
+        - end_date
+        - metadata
+select_permissions:
+  - role: user
+    permission:
+      columns:
+        - id
+        - source_id
+        - target_id
+        - type
+        - start_date
+        - end_date
+        - metadata
+        - created_at
+      filter:
+        _or:
+          - source_id:
+              _eq: X-Hasura-User-Id
+          - target_id:
+              _eq: X-Hasura-User-Id
+          - type:
+              _in:
+                - member_of
+                - embodies_value
+                - adopts_mission
+      allow_aggregations: true
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        source_id:
+          _eq: X-Hasura-User-Id
