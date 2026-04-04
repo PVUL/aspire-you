@@ -1,0 +1,4 @@
+-- Could not auto-generate a down migration
+-- Please write an appropriate down migration for the SQL below:
+-- ALTER TABLE public.app_settings ALTER COLUMN value DROP DEFAULT;
+-- ALTER TABLE public.app_settings ALTER COLUMN value TYPE bool USING value::bool;

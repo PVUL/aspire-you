@@ -123,6 +123,18 @@ export default function Home() {
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(() => getUiState().settingsOpen ?? false);
   const [isExpanded, setIsExpanded] = useState(() => getUiState().dashboardExpanded ?? false);
+  const [gateEnabled, setGateEnabled] = useState(true);
+  const [gateLoading, setGateLoading] = useState(false);
+
+  useEffect(() => {
+    if (user?.email === "paul.a.yun@gmail.com") {
+      const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+      fetch(`${backendUrl}/settings/gate`)
+        .then(r => r.json())
+        .then(data => setGateEnabled(Boolean(data.enabled)))
+        .catch(console.error);
+    }
+  }, [user?.email, nhost.functions.url]);
 
   useEffect(() => {
     patchUiState({ settingsOpen: isSettingsOpen });
@@ -461,12 +473,12 @@ export default function Home() {
                   {/* Future icon buttons go here */}
                 </div>
 
-                {/* Settings widget — animates width and left margin to collapse rightward */}
+                {/* Settings widgets column — animates width and left margin to collapse rightward */}
                 <div
-                  className={`transition-[width,opacity,margin] duration-300 ease-in-out overflow-hidden shrink-0 ${isSettingsOpen ? 'w-60 opacity-100 ml-3' : 'w-0 opacity-0 pointer-events-none ml-0'
+                  className={`transition-[width,opacity,margin] duration-300 ease-in-out overflow-hidden shrink-0 flex flex-col gap-3 ${isSettingsOpen ? 'w-60 opacity-100 ml-3' : 'w-0 opacity-0 pointer-events-none ml-0'
                     }`}
                 >
-                  <div className="w-60 rounded-2xl border border-neutral-200/60 dark:border-neutral-700/40 bg-white dark:bg-[#222222] shadow-xl dark:shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden h-[196px] flex flex-col">
+                  <div className="w-60 rounded-2xl border border-neutral-200/60 dark:border-neutral-700/40 bg-white dark:bg-[#222222] shadow-xl dark:shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden min-h-[196px] flex flex-col shrink-0">
                     {/* Header */}
                     <div className="px-4 py-3 border-b border-neutral-200/60 dark:border-neutral-700/40">
                       <h3 className="text-[10px] font-semibold tracking-widest uppercase text-neutral-400 dark:text-neutral-500 select-none">
@@ -500,11 +512,8 @@ export default function Home() {
                       )}
                     </div>
 
-                    {/* Spacer pushes button to bottom */}
-                    <div className="flex-1" />
-
                     {/* Pinned bottom action — always same position */}
-                    <div className="px-3 pb-3 border-t border-neutral-100 dark:border-neutral-800 pt-3">
+                    <div className="px-3 pb-3 border-t border-neutral-100 dark:border-neutral-800 pt-3 mt-auto">
                       {githubConnected ? (
                         disconnectConfirm ? (
                           <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 animate-in fade-in slide-in-from-bottom-1 duration-150">
@@ -543,6 +552,56 @@ export default function Home() {
                       )}
                     </div>
                   </div>
+
+                  {/* Separate Admin Widget Container */}
+                  {user?.email === "paul.a.yun@gmail.com" && (
+                    <div className="w-60 rounded-2xl border border-neutral-200/60 dark:border-neutral-700/40 bg-white dark:bg-[#222222] shadow-xl dark:shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden shrink-0 flex flex-col">
+                      <div className="px-4 py-3 border-b border-neutral-200/60 dark:border-neutral-700/40">
+                        <h3 className="text-[10px] font-semibold tracking-widest uppercase text-neutral-400 dark:text-neutral-500 select-none">
+                          Admin
+                        </h3>
+                      </div>
+                      <div className="px-4 py-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[13px] font-semibold text-neutral-800 dark:text-neutral-200">
+                            Gate App Access
+                          </span>
+                          <button
+                            disabled={gateLoading}
+                            onClick={async () => {
+                              const next = !gateEnabled;
+                              setGateEnabled(next);
+                              setGateLoading(true);
+                              try {
+                                const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+                                const token = nhost.auth.getAccessToken();
+                                const res = await fetch(`${backendUrl}/settings/gate`, {
+                                  method: 'POST',
+                                  headers: {
+                                    'Authorization': `Bearer ${token}`,
+                                    'Content-Type': 'application/json'
+                                  },
+                                  body: JSON.stringify({ enabled: next })
+                                });
+                                if (!res.ok) {
+                                  setGateEnabled(!next);
+                                  showToast("Failed to update password gate setting");
+                                }
+                              } catch (e) {
+                                setGateEnabled(!next);
+                                showToast("Network error updating password gate");
+                              } finally {
+                                setGateLoading(false);
+                              }
+                            }}
+                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${gateEnabled ? 'bg-[#34C759]' : 'bg-neutral-300 dark:bg-neutral-600'} ${gateLoading ? 'opacity-50' : ''}`}
+                          >
+                            <span className={`pointer-events-none inline-block h-[16px] w-[16px] transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${gateEnabled ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

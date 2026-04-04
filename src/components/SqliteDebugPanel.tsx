@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useAuthenticationStatus } from "@nhost/react";
 import { sql as dbSql, execRaw } from "@/lib/localDb";
 import { fetchInterceptor, type ApiCall } from "@/lib/devFetchInterceptor";
 import { getUiState, patchUiState } from "@/lib/uiState";
@@ -19,12 +20,15 @@ const DEFAULT_HEIGHT = 320;
 const MAX_HEIGHT = typeof window !== "undefined" ? window.innerHeight * 0.85 : 700;
 
 export function SqliteDebugPanel() {
+  const { isAuthenticated } = useAuthenticationStatus();
   const [isOpen, setIsOpen] = useState(() => getUiState().debugOpen ?? false);
   const [height, setHeight] = useState(() => getUiState().debugHeight ?? DEFAULT_HEIGHT);
 
   useEffect(() => {
-    patchUiState({ debugOpen: isOpen });
-  }, [isOpen]);
+    if (isAuthenticated) {
+      patchUiState({ debugOpen: isOpen });
+    }
+  }, [isOpen, isAuthenticated]);
 
   useEffect(() => {
     patchUiState({ debugHeight: height });
@@ -232,6 +236,8 @@ export function SqliteDebugPanel() {
   };
 
   const actualHeight = isOpen ? height : 28; // Toggle bar is 28px thick
+
+  if (!isAuthenticated) return null;
   
   return (
     <div 
