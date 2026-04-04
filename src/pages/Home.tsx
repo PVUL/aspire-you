@@ -107,7 +107,9 @@ export default function Home() {
   const [vaultStatus, setVaultStatus] = useState<string | null>(null);
   const [vaultMeta, setVaultMeta] = useState<{ exists: boolean; url: string } | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
+  const [githubStatusLoading, setGithubStatusLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectConfirm, setDisconnectConfirm] = useState(false);
 
   // Toast
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
@@ -118,7 +120,7 @@ export default function Home() {
   // Auth flow state
   const [email, setEmail] = useState("");
   const [authStep, setAuthStep] = useState<"email" | "code">("email");
-  
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(() => getUiState().settingsOpen ?? false);
   const [isExpanded, setIsExpanded] = useState(() => getUiState().dashboardExpanded ?? false);
 
@@ -164,6 +166,7 @@ export default function Home() {
 
     async function checkStatus() {
       if (!isAuthenticated) return;
+      setGithubStatusLoading(true);
       try {
         const token = nhost.auth.getAccessToken();
         const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
@@ -192,6 +195,8 @@ export default function Home() {
         }
       } catch (e) {
         console.error("Status check failed", e);
+      } finally {
+        if (active) setGithubStatusLoading(false);
       }
     }
 
@@ -461,7 +466,7 @@ export default function Home() {
                   className={`transition-[width,opacity,margin] duration-300 ease-in-out overflow-hidden shrink-0 ${isSettingsOpen ? 'w-60 opacity-100 ml-3' : 'w-0 opacity-0 pointer-events-none ml-0'
                     }`}
                 >
-                  <div className="w-60 rounded-2xl border border-neutral-200/60 dark:border-neutral-700/40 bg-white dark:bg-[#222222] shadow-xl dark:shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
+                  <div className="w-60 rounded-2xl border border-neutral-200/60 dark:border-neutral-700/40 bg-white dark:bg-[#222222] shadow-xl dark:shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden h-[196px] flex flex-col">
                     {/* Header */}
                     <div className="px-4 py-3 border-b border-neutral-200/60 dark:border-neutral-700/40">
                       <h3 className="text-[10px] font-semibold tracking-widest uppercase text-neutral-400 dark:text-neutral-500 select-none">
@@ -469,31 +474,71 @@ export default function Home() {
                       </h3>
                     </div>
                     {/* GitHub section */}
-                    <div className="px-4 py-4 space-y-3">
+                    <div className="px-4 py-4 pb-2 space-y-2">
                       <div className="flex items-center gap-2">
                         <svg className="w-4 h-4 text-neutral-500 dark:text-neutral-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
                           <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                         </svg>
                         <span className="text-[13px] font-semibold text-neutral-800 dark:text-neutral-200 flex-1">GitHub</span>
-                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${githubConnected ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.7)]' : 'bg-neutral-400 dark:bg-neutral-600'}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors duration-500 ${githubConnected ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.7)]' : 'bg-neutral-400 dark:bg-neutral-600'}`} />
                       </div>
                       <p className="text-[11px] text-neutral-400 dark:text-neutral-500 leading-relaxed">
                         {githubConnected ? "Connected — vault syncing enabled." : "Connect to enable vault syncing."}
                       </p>
-                      {!githubConnected ? (
-                        <button
-                          onClick={handleConnectGithub}
-                          className="w-full text-[12px] font-medium px-3 py-2 rounded-lg bg-neutral-900 dark:bg-neutral-700 text-white hover:bg-neutral-800 dark:hover:bg-neutral-600 transition-all active:scale-[0.98]"
+                      {vaultMeta?.url && githubConnected && (
+                        <a
+                          href={vaultMeta.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 text-[11px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors group"
                         >
-                          Connect GitHub
-                        </button>
+                          <svg className="w-3 h-3 shrink-0 text-neutral-400 group-hover:text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                          <span className="truncate font-mono">{vaultMeta.url.replace(/^https?:\/\//, '')}</span>
+                        </a>
+                      )}
+                    </div>
+
+                    {/* Spacer pushes button to bottom */}
+                    <div className="flex-1" />
+
+                    {/* Pinned bottom action — always same position */}
+                    <div className="px-3 pb-3 border-t border-neutral-100 dark:border-neutral-800 pt-3">
+                      {githubConnected ? (
+                        disconnectConfirm ? (
+                          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 animate-in fade-in slide-in-from-bottom-1 duration-150">
+                            <span className="text-[11px] text-red-600 dark:text-red-400 font-medium flex-1 truncate">Disconnect GitHub?</span>
+                            <button
+                              onClick={() => { handleDisconnectGithub(); setDisconnectConfirm(false); }}
+                              disabled={disconnecting}
+                              className="text-[10px] font-semibold px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 active:scale-95 transition-all shrink-0 disabled:opacity-50"
+                            >{disconnecting ? "..." : "Yes"}</button>
+                            <button
+                              onClick={() => setDisconnectConfirm(false)}
+                              className="text-[10px] font-semibold px-2 py-1 rounded bg-neutral-200 dark:bg-neutral-600 text-neutral-700 dark:text-neutral-200 hover:opacity-80 active:scale-95 transition-all shrink-0"
+                            >No</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setDisconnectConfirm(true)}
+                            className="w-full text-[12px] font-medium px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/40 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-all active:scale-[0.98]"
+                          >
+                            Disconnect Account
+                          </button>
+                        )
                       ) : (
                         <button
-                          onClick={handleDisconnectGithub}
-                          disabled={disconnecting}
-                          className="w-full text-[12px] font-medium px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/40 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-all active:scale-[0.98]"
+                          onClick={handleConnectGithub}
+                          disabled={githubStatusLoading}
+                          className="w-full text-[12px] font-medium px-3 py-2 rounded-lg bg-neutral-900 dark:bg-neutral-700 text-white hover:bg-neutral-800 dark:hover:bg-neutral-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                         >
-                          {disconnecting ? "Disconnecting..." : "Disconnect Account"}
+                          {githubStatusLoading ? (
+                            <span className="flex items-center justify-center gap-2">
+                              <span className="w-3 h-3 rounded-full border border-white/40 border-t-white animate-spin" />
+                              Checking...
+                            </span>
+                          ) : "Connect GitHub"}
                         </button>
                       )}
                     </div>

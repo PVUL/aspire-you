@@ -447,7 +447,7 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
 
               if (isPendingDelete) {
                 return (
-                  <div key={entry.date} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60">
+                  <div key={entry.date} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 animate-in fade-in slide-in-from-bottom-1 duration-150">
                     <span className="text-[11px] text-red-600 dark:text-red-400 font-medium flex-1 truncate">Delete {entry.date}?</span>
                     <button
                       onClick={() => handleDeleteEntry(entry.date)}
