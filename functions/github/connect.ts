@@ -1,10 +1,8 @@
 import { Request, Response } from 'express';
-import { getSecret } from '../_utils/localSecrets';
 
 export default async function githubConnect(req: Request, res: Response) {
   // GITHUB_CLIENT_ID is public (sent in OAuth redirect URL).
-  // getSecret() checks process.env first, then .secrets/.env.local for local dev.
-  const GITHUB_CLIENT_ID = getSecret('GITHUB_CLIENT_ID') || 'Ov23lirQs4rAQCbDPihn';
+  const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lirQs4rAQCbDPihn';
 
   const userId = req.query.user_id as string;
   const redirectAfter = req.query.redirect_uri as string || '/';

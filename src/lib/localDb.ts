@@ -1,7 +1,18 @@
 import { SQLocal } from 'sqlocal';
 
 export const db = new SQLocal('aspire-journal.sqlite3');
-export const { sql } = db;
+
+// Wrapper for sql to dispatch events on mutations for realtime debugger refresh
+export const sql = async (strings: TemplateStringsArray, ...values: any[]) => {
+  const result = await db.sql(strings, ...values);
+  const queryStr = strings.join('');
+  if (/(?:INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER)\b/i.test(queryStr)) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sqlite-mutation'));
+    }
+  }
+  return result;
+};
 
 // Execute arbitrary raw SQL — used by the debug panel
 export async function execRaw(query: string): Promise<Record<string, unknown>[]> {

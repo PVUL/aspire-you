@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { sql as dbSql, execRaw } from "@/lib/localDb";
 import { fetchInterceptor, type ApiCall } from "@/lib/devFetchInterceptor";
+import { getUiState, patchUiState } from "@/lib/uiState";
 
 type Row = Record<string, unknown>;
 
@@ -18,8 +19,16 @@ const DEFAULT_HEIGHT = 320;
 const MAX_HEIGHT = typeof window !== "undefined" ? window.innerHeight * 0.85 : 700;
 
 export function SqliteDebugPanel() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [height, setHeight] = useState(DEFAULT_HEIGHT);
+  const [isOpen, setIsOpen] = useState(() => getUiState().debugOpen ?? false);
+  const [height, setHeight] = useState(() => getUiState().debugHeight ?? DEFAULT_HEIGHT);
+
+  useEffect(() => {
+    patchUiState({ debugOpen: isOpen });
+  }, [isOpen]);
+
+  useEffect(() => {
+    patchUiState({ debugHeight: height });
+  }, [height]);
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>("entries");
   const [query, setQuery] = useState("");
@@ -114,6 +123,28 @@ export function SqliteDebugPanel() {
       setIsLoading(false);
     }
   }, [query, loadTables]);
+
+  const refreshQuerySilent = useCallback(async () => {
+    if (!query.trim()) return;
+    try {
+      const rowArray = await execRaw(query.trim());
+      const columns = rowArray.length > 0 ? Object.keys(rowArray[0]) : [];
+      setResult(prev => prev ? { ...prev, columns, rows: rowArray } : null);
+    } catch {
+      // suppress error on background silent refresh
+    }
+  }, [query]);
+
+  // Real-time auto-refresh when db changes in background
+  useEffect(() => {
+    const onMutate = () => {
+      if (isOpen && activeTab === "Browser SQLite") {
+        refreshQuerySilent();
+      }
+    };
+    window.addEventListener("sqlite-mutation", onMutate);
+    return () => window.removeEventListener("sqlite-mutation", onMutate);
+  }, [isOpen, activeTab, refreshQuerySilent]);
 
   // Export helpers
   const exportJSON = () => {

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { format } from "date-fns";
 import { initDb, sql, EntryRecord } from "@/lib/localDb";
 import { useDebouncedCallback } from "use-debounce";
+import { getUiState, patchUiState } from "@/lib/uiState";
 
 import { useNhostClient, useAccessToken } from "@nhost/react";
 
@@ -11,8 +12,12 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
   const nhost = useNhostClient();
   const accessToken = useAccessToken();
   const [entries, setEntries] = useState<{ date: string; sha: string | null }[]>([]);
-  const [activeDate, setActiveDate] = useState<string>("");
+  const [activeDate, setActiveDate] = useState<string>(() => getUiState().activeDate ?? "");
   const [todayStr, setTodayStr] = useState<string>("");
+
+  useEffect(() => {
+    if (activeDate) patchUiState({ activeDate });
+  }, [activeDate]);
   const [hasMounted, setHasMounted] = useState(false);
 
   const [content, setContent] = useState("");
@@ -26,8 +31,16 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null); // date string pending deletion
 
   // Sidebar state
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(220);
+  const [sidebarOpen, setSidebarOpen] = useState(() => getUiState().sidebarOpen ?? true);
+  const [sidebarWidth, setSidebarWidth] = useState(() => getUiState().sidebarWidth ?? 220);
+
+  useEffect(() => {
+    patchUiState({ sidebarOpen });
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    patchUiState({ sidebarWidth });
+  }, [sidebarWidth]);
   const [isResizing, setIsResizing] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -205,15 +218,15 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
   }, [activeDate, isReady, nhost, accessToken]);
 
   // Handle Editor changes: Auto-save to Local SQLite ONLY
-  const autoSaveToLocalDb = useDebouncedCallback(async (text: string, currentSha: string | null) => {
+  const autoSaveToLocalDb = useDebouncedCallback(async (date: string, text: string, currentSha: string | null, syncedAt: number | null) => {
     try {
       await sql`
         INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
-        VALUES (${activeDate}, ${text}, ${currentSha}, ${lastSyncedAt}, ${Date.now()})
+        VALUES (${date}, ${text}, ${currentSha}, ${syncedAt}, ${Date.now()})
       `;
       setEntries(prev => {
-        if (!prev.find(p => p.date === activeDate)) {
-          const fresh = [{ date: activeDate, sha: currentSha }, ...prev];
+        if (!prev.find(p => p.date === date)) {
+          const fresh = [{ date: date, sha: currentSha }, ...prev];
           return fresh.sort((a, b) => b.date.localeCompare(a.date));
         }
         return prev;
@@ -227,7 +240,7 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
     const text = e.target.value;
     setContent(text);
     setSyncStatus("unsaved");
-    autoSaveToLocalDb(text, sha);
+    autoSaveToLocalDb(activeDate, text, sha, lastSyncedAt);
   };
 
   const handlePullFromGithub = async () => {

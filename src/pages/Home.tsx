@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useNhostClient, useUserData, useAuthenticationStatus, useSignOut, useSignInEmailOTP } from "@nhost/react";
 import { VaultDashboard } from "@/components/VaultDashboard";
+import { getUiState, patchUiState } from "@/lib/uiState";
 
 type ToastType = "error" | "info" | "success";
 function Toast({ message, type, onDismiss }: { message: string; type: ToastType; onDismiss: () => void }) {
@@ -117,8 +118,17 @@ export default function Home() {
   // Auth flow state
   const [email, setEmail] = useState("");
   const [authStep, setAuthStep] = useState<"email" | "code">("email");
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  
+  const [isSettingsOpen, setIsSettingsOpen] = useState(() => getUiState().settingsOpen ?? false);
+  const [isExpanded, setIsExpanded] = useState(() => getUiState().dashboardExpanded ?? false);
+
+  useEffect(() => {
+    patchUiState({ settingsOpen: isSettingsOpen });
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
+    patchUiState({ dashboardExpanded: isExpanded });
+  }, [isExpanded]);
 
   // Drive OTP screen from hook state machine — NOT from promise return value.
   // needsOtp=true means OTP was successfully sent; isError=true means it failed.

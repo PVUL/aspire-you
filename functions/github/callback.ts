@@ -1,12 +1,9 @@
 import { Request, Response } from 'express';
-import { getSecret } from '../_utils/localSecrets';
 
 export default async function githubCallback(req: Request, res: Response) {
   // GITHUB_CLIENT_ID is public. GITHUB_CLIENT_SECRET must stay server-side.
-  // getSecret() checks process.env first, then .secrets/.env.local for local dev
-  // (Nhost CLI does not inject nhost.toml [[functions.env]] secrets locally).
-  const GITHUB_CLIENT_ID = getSecret('GITHUB_CLIENT_ID') || 'Ov23lirQs4rAQCbDPihn';
-  const GITHUB_CLIENT_SECRET = getSecret('GITHUB_CLIENT_SECRET');
+  const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lirQs4rAQCbDPihn';
+  const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 
   if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
     return res.status(500).json({ error: 'Missing GitHub OAuth credentials in environment' });
