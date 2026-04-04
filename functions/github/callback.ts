@@ -1,11 +1,15 @@
 import { Request, Response } from 'express';
+import { getSecret } from '../_utils/localSecrets';
 
 export default async function githubCallback(req: Request, res: Response) {
-  const GITHUB_CLIENT_ID = 'Ov23lirQs4rAQCbDPihn';
-  const GITHUB_CLIENT_SECRET = '0dd7e29cc7e1fedefb2adcb555912f9cda6365c1';
+  // GITHUB_CLIENT_ID is public. GITHUB_CLIENT_SECRET must stay server-side.
+  // getSecret() checks process.env first, then .secrets/.env.local for local dev
+  // (Nhost CLI does not inject nhost.toml [[functions.env]] secrets locally).
+  const GITHUB_CLIENT_ID = getSecret('GITHUB_CLIENT_ID') || 'Ov23lirQs4rAQCbDPihn';
+  const GITHUB_CLIENT_SECRET = getSecret('GITHUB_CLIENT_SECRET');
 
   if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
-    return res.status(500).json({ error: 'Missing GitHub OAuth credentials' });
+    return res.status(500).json({ error: 'Missing GitHub OAuth credentials in environment' });
   }
 
   const code = req.query.code as string;
@@ -67,10 +71,10 @@ export default async function githubCallback(req: Request, res: Response) {
       },
       body: JSON.stringify({
         query: `
-          mutation UpsertGithubConnection($userId: String!, $accessToken: String!) {
-            insert_github_connections_one(
-              object: { user_id: $userId, access_token: $accessToken, updated_at: "now()" }
-              on_conflict: { constraint: github_connections_pkey, update_columns: [access_token, updated_at] }
+          mutation UpsertUserVaultConnection($userId: String!, $accessToken: String!) {
+            insert_user_vault_connections_one(
+              object: { user_id: $userId, provider: "github", access_token: $accessToken, updated_at: "now()" }
+              on_conflict: { constraint: user_vault_connections_pkey, update_columns: [access_token, updated_at] }
             ) {
               user_id
             }

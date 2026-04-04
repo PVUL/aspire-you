@@ -1,4 +1,7 @@
 [global]
+[[global.environment]]
+name = 'GITHUB_CLIENT_SECRET'
+value = '3f871965aee996ae2f5266fe8469ea06abbc4970'
 
 [hasura]
 version = 'v2.48.5-ce'
@@ -31,14 +34,6 @@ httpPoolSize = 100
 [functions]
 [functions.node]
 version = 22
-
-[[functions.env]]
-name = 'GITHUB_CLIENT_ID'
-value = '{{ secrets.GITHUB_CLIENT_ID }}'
-
-[[functions.env]]
-name = 'GITHUB_CLIENT_SECRET'
-value = '{{ secrets.GITHUB_CLIENT_SECRET }}'
 
 [auth]
 version = '0.49.0'
@@ -87,7 +82,7 @@ enabled = false
 
 [auth.method.otp]
 [auth.method.otp.email]
-enabled = false
+enabled = true
 
 [auth.method.emailPassword]
 hibpEnabled = false
@@ -200,12 +195,11 @@ interval = '5m'
 [postgres]
 version = '15.15-20251217-1'
 
-[postgres.settings]
-extensions = []
-
 [postgres.resources]
 [postgres.resources.storage]
 capacity = 1
+
+[postgres.settings]
 
 [provider]
 

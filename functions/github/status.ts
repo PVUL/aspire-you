@@ -19,22 +19,16 @@ export default async function githubStatus(req: Request, res: Response) {
   
   // Verify token (in production, verify properly using JWKS)
   const payloadBase64 = token.split('.')[1];
-  let clerkUserId: string;
+  let nhostUserId: string;
   try {
     const decodedJson = Buffer.from(payloadBase64, 'base64').toString();
     const payload = JSON.parse(decodedJson);
-    clerkUserId = payload.sub || payload['x-hasura-user-id'];
-    if (!clerkUserId) {
-      // Sometimes it's nested
-      if (payload['https://hasura.io/jwt/claims']) {
-        clerkUserId = payload['https://hasura.io/jwt/claims']['x-hasura-user-id'];
-      }
-    }
+    nhostUserId = payload.sub || payload['https://hasura.io/jwt/claims']?.['x-hasura-user-id'];
   } catch (error) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  if (!clerkUserId) {
+  if (!nhostUserId) {
     return res.status(401).json({ error: 'Invalid user id' });
   }
 
@@ -51,14 +45,14 @@ export default async function githubStatus(req: Request, res: Response) {
       body: JSON.stringify({
         query: `
           query GetGithubConnection($userId: String!) {
-            github_connections_by_pk(user_id: $userId) {
+            user_vault_connections_by_pk(user_id: $userId, provider: "github") {
               user_id
               access_token
             }
           }
         `,
         variables: {
-          userId: clerkUserId,
+          userId: nhostUserId,
         },
       }),
     });
@@ -69,7 +63,7 @@ export default async function githubStatus(req: Request, res: Response) {
       return res.status(500).json({ error: "Database error" });
     }
 
-    const connection = gqlData.data.github_connections_by_pk;
+    const connection = gqlData.data.user_vault_connections_by_pk;
     if (!connection) {
       return res.status(200).json({ connected: false });
     }

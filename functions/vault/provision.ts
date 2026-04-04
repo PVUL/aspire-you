@@ -45,7 +45,7 @@ export default async function provisionVault(req: Request, res: Response) {
       body: JSON.stringify({
         query: `
           query GetGithubConnection($userId: String!) {
-            github_connections_by_pk(user_id: $userId) {
+            user_vault_connections_by_pk(user_id: $userId, provider: "github") {
               access_token
             }
           }
@@ -55,7 +55,7 @@ export default async function provisionVault(req: Request, res: Response) {
     });
 
     const gqlData: any = await gqlRes.json();
-    const githubToken = gqlData?.data?.github_connections_by_pk?.access_token;
+    const githubToken = gqlData?.data?.user_vault_connections_by_pk?.access_token;
 
     if (!githubToken) {
       return res.status(400).json({
@@ -77,6 +77,7 @@ export default async function provisionVault(req: Request, res: Response) {
       return res.status(200).json({ success: true, message: "Vault exists", repo: VAULT_REPO_NAME });
     } catch (err: any) {
       if (err.status === 404) {
+        // TODO: Rather than empty auto-init, clone a specified template repository
         await octokit.rest.repos.createForAuthenticatedUser({
           name: VAULT_REPO_NAME,
           private: true,

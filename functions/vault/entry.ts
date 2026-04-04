@@ -37,7 +37,7 @@ export default async function entryVault(req: Request, res: Response) {
       body: JSON.stringify({
         query: `
           query GetGithubConnection($userId: String!) {
-            github_connections_by_pk(user_id: $userId) { access_token }
+            user_vault_connections_by_pk(user_id: $userId, provider: "github") { access_token }
           }
         `,
         variables: { userId },
@@ -45,7 +45,7 @@ export default async function entryVault(req: Request, res: Response) {
     });
 
     const gqlData: any = await gqlRes.json();
-    const githubToken = gqlData?.data?.github_connections_by_pk?.access_token;
+    const githubToken = gqlData?.data?.user_vault_connections_by_pk?.access_token;
 
     if (!githubToken) {
       return res.status(400).json({ error: 'No GitHub connection found.', code: 'GITHUB_NOT_CONNECTED' });

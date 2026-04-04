@@ -1,17 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { format } from "date-fns";
 import { initDb, sql, EntryRecord } from "@/lib/localDb";
 import { useDebouncedCallback } from "use-debounce";
 
 import { useNhostClient, useAccessToken } from "@nhost/react";
-import { useAuth } from "@clerk/clerk-react";
 
-export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boolean, url: string) => void }) {
+export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoaded?: (exists: boolean, url: string) => void; githubConnected?: boolean }) {
   const nhost = useNhostClient();
   const accessToken = useAccessToken();
-  const { getToken } = useAuth();
   const [entries, setEntries] = useState<{ date: string; sha: string | null }[]>([]);
   const [activeDate, setActiveDate] = useState<string>("");
   const [todayStr, setTodayStr] = useState<string>("");
@@ -27,13 +25,51 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
   const [isReady, setIsReady] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null); // date string pending deletion
 
+  // Sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(220);
+  const [isResizing, setIsResizing] = useState(false);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    dragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = ev.clientX - dragRef.current.startX;
+      const newW = Math.min(480, Math.max(160, dragRef.current.startWidth + delta));
+      setSidebarWidth(newW);
+    };
+
+    const onUp = () => {
+      dragRef.current = null;
+      setIsResizing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [sidebarWidth]);
   // Set hasMounted and todayStr on mount
   useEffect(() => {
     setHasMounted(true);
     const t = format(new Date(), "yyyy-MM-dd");
     setTodayStr(t);
-    setActiveDate(t);
   }, []);
+
+  // Auto-select latest entry once ready
+  useEffect(() => {
+    if (isReady && !activeDate) {
+      if (entries.length > 0) {
+        setActiveDate(entries[0].date);
+      } else {
+        setActiveDate(todayStr);
+      }
+    }
+  }, [isReady, activeDate, entries, todayStr]);
 
   // Initialize DB and fetch list
   useEffect(() => {
@@ -67,9 +103,9 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
         if (active) setIsReady(true);
       }
 
-      // Background sync with GitHub
-      try {
-        const token = accessToken || await getToken();
+      // Background sync with GitHub (only if connected)
+      if (githubConnected) try {
+        const token = accessToken;
         if (!token) return;
 
         const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
@@ -104,7 +140,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
     }
     setup();
     return () => { active = false; };
-  }, [nhost, accessToken, onVaultLoaded]); // listen to accessToken specifically
+  }, [nhost, accessToken, onVaultLoaded, githubConnected]);
 
   // When activeDate changes, load from Local SQLite, fallback to GitHub
   useEffect(() => {
@@ -112,8 +148,6 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
 
     let active = true;
     async function loadActiveEntry() {
-      if (active) setContent("Loading...");
-
       try {
         const localResult = await sql`SELECT * FROM entries WHERE date = ${activeDate}`;
         const localEntry = (localResult as EntryRecord[])[0];
@@ -126,9 +160,10 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
             setSyncStatus(localEntry.updated_at > (localEntry.last_synced_at || 0) ? "unsaved" : "synced");
           }
         } else {
-          const token = accessToken || await getToken();
-          if (!token) return;
+          const token = accessToken;
+          if (!token || !githubConnected) return;
 
+          if (active) setContent("Loading...");
           const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
           const res = await fetch(`${backendUrl}/vault/entry`, {
             method: 'POST',
@@ -196,7 +231,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
   };
 
   const handlePullFromGithub = async () => {
-    const token = accessToken || await getToken();
+    const token = accessToken;
     if (!token) return alert("Not authenticated");
     setIsPulling(true);
     try {
@@ -233,7 +268,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
 
   // Delete entry from local SQLite + GitHub
   const handleDeleteEntry = async (date: string) => {
-    const token = accessToken || await getToken();
+    const token = accessToken;
     const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
 
     // Delete from local SQLite
@@ -268,7 +303,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
 
   // Manual save to GitHub
   const handlePushToGithub = async () => {
-    const token = accessToken || await getToken();
+    const token = accessToken;
     if (!token) return alert("Not authenticated");
     setSyncStatus("saving");
     try {
@@ -335,14 +370,14 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
 
   if (!hasMounted) {
     return (
-      <div className="flex h-[600px] rounded-xl overflow-hidden bg-white dark:bg-neutral-950 border border-neutral-200/60 dark:border-neutral-800/60 animate-pulse">
-        <div className="w-[220px] border-r border-neutral-200/60 dark:border-neutral-800/60 bg-neutral-50/80 dark:bg-neutral-900/50"></div>
+      <div className="flex h-[600px] rounded-xl overflow-hidden bg-white dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700/40 animate-pulse">
+        <div className="w-[220px] border-r border-neutral-200/60 dark:border-neutral-700/40 bg-neutral-50/80 dark:bg-neutral-700/50"></div>
         <div className="flex-1 flex flex-col">
-          <div className="h-[52px] border-b border-neutral-200/60 dark:border-neutral-800/60"></div>
+          <div className="h-[52px] border-b border-neutral-200/60 dark:border-neutral-700/40"></div>
           <div className="flex-1 p-6 space-y-4">
-            <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded w-3/4"></div>
-            <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded w-full"></div>
-            <div className="h-4 bg-neutral-100 dark:bg-neutral-800 rounded w-5/6"></div>
+            <div className="h-4 bg-neutral-100 dark:bg-neutral-700 rounded w-3/4"></div>
+            <div className="h-4 bg-neutral-100 dark:bg-neutral-700 rounded w-full"></div>
+            <div className="h-4 bg-neutral-100 dark:bg-neutral-700 rounded w-5/6"></div>
           </div>
         </div>
       </div>
@@ -350,17 +385,30 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
   }
 
   return (
-    <div className="flex h-[600px] rounded-xl overflow-hidden bg-white dark:bg-neutral-950 shadow-[0_1px_3px_rgba(0,0,0,0.08),0_8px_24px_rgba(0,0,0,0.04)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.3),0_8px_24px_rgba(0,0,0,0.2)] border border-neutral-200/60 dark:border-neutral-800/60 transition-all">
+    <div className="flex w-full h-full rounded-xl overflow-hidden bg-white dark:bg-transparent shadow-[0_1px_3px_rgba(0,0,0,0.06),0_4px_16px_rgba(0,0,0,0.04)] dark:shadow-[0_2px_16px_rgba(0,0,0,0.5)] border border-neutral-200/60 dark:border-neutral-700/40 transition-all">
       {/* ── Sidebar ── */}
-      <div className="w-[220px] min-w-[220px] border-r border-neutral-200/60 dark:border-neutral-800/60 bg-neutral-50/80 dark:bg-neutral-900/50 flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200/60 dark:border-neutral-800/60">
-          <span className="text-[11px] font-semibold tracking-widest uppercase text-neutral-400 dark:text-neutral-500 select-none">
+      <div 
+        className={`relative bg-neutral-50/80 dark:bg-[#1c1c1c] flex flex-col transition-[width] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] shrink-0 ${isResizing ? '!transition-none' : ''} ${sidebarOpen ? 'border-r border-neutral-200/60 dark:border-neutral-700/40' : 'border-none'}`}
+        style={{ width: sidebarOpen ? sidebarWidth : 0 }}
+      >
+        {/* Drag Handle */}
+        {sidebarOpen && (
+          <div 
+            className="absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-20 hover:bg-blue-500/20 active:bg-blue-500/40 transition-colors translate-x-1/2"
+            onMouseDown={onDragStart}
+          />
+        )}
+        
+        {/* Toggle & Content Wrapper */}
+        <div className={`flex flex-col w-full h-full overflow-hidden transition-opacity duration-200 ease-out ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200/60 dark:border-neutral-700/40 shrink-0">
+          <span className="text-[11px] font-semibold tracking-widest uppercase text-neutral-400 dark:text-neutral-400 select-none">
             Entries
           </span>
           <button
             onClick={() => setActiveDate(todayStr)}
             disabled={entries.some(e => e.date === todayStr)}
-            className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 hover:opacity-90 active:scale-[0.97] transition-all disabled:opacity-20 disabled:cursor-not-allowed disabled:active:scale-100"
+            className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-neutral-800 text-white dark:bg-neutral-600 dark:text-white hover:opacity-90 active:scale-[0.97] transition-all disabled:opacity-20 disabled:cursor-not-allowed disabled:active:scale-100"
           >
             + Today
           </button>
@@ -369,11 +417,11 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
           {!isReady ? (
             <div className="space-y-1.5 p-1.5 animate-pulse">
               {[100, 75, 88].map((w, i) => (
-                <div key={i} className="h-9 bg-neutral-200/70 dark:bg-neutral-800/70 rounded-lg" style={{ width: `${w}%` }} />
+                <div key={i} className="h-9 bg-neutral-200/70 dark:bg-neutral-700/50 rounded-lg" style={{ width: `${w}%` }} />
               ))}
             </div>
           ) : entries.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-neutral-400 dark:text-neutral-600 text-xs text-center px-4 gap-1">
+            <div className="flex flex-col items-center justify-center h-full text-neutral-400 dark:text-neutral-500 text-xs text-center px-4 gap-1">
               <span className="text-2xl">📝</span>
               <span>No entries yet</span>
               <span className="text-[10px]">Click &quot;+ Today&quot; to start</span>
@@ -394,7 +442,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
                     >Yes</button>
                     <button
                       onClick={() => setDeleteConfirm(null)}
-                      className="text-[10px] font-semibold px-2 py-1 rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:opacity-80 active:scale-95 transition-all shrink-0"
+                      className="text-[10px] font-semibold px-2 py-1 rounded bg-neutral-200 dark:bg-neutral-600 text-neutral-700 dark:text-neutral-200 hover:opacity-80 active:scale-95 transition-all shrink-0"
                     >No</button>
                   </div>
                 );
@@ -405,11 +453,11 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
                   key={entry.date}
                   className={`group w-full text-left px-3 py-2.5 rounded-lg text-[13px] transition-all flex items-center gap-2.5 ${isActive
                       ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-sm font-medium"
-                      : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-neutral-800/60"
+                      : "text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/50"
                     }`}
                 >
                   <button className="flex-1 flex items-center gap-2.5 min-w-0" onClick={() => setActiveDate(entry.date)}>
-                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${isActive ? "bg-white/60 dark:bg-neutral-900/60" : entry.sha ? "bg-emerald-400/70" : "bg-amber-400/70"
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${isActive ? "bg-white/60 dark:bg-neutral-800/60" : entry.sha ? "bg-emerald-400/70" : "bg-amber-400/70"
                       }`} />
                     <span className="truncate font-mono tracking-tight">{entry.date}</span>
                     {isToday && (
@@ -435,29 +483,35 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
             })
           )}
         </div>
+        </div>
       </div>
 
       {/* ── Editor ── */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 dark:bg-[#262626]">
         {/* Header bar — fixed height, never wraps */}
-        <div className="shrink-0 flex items-center justify-between gap-3 px-5 h-[52px] border-b border-neutral-200/60 dark:border-neutral-800/60">
-          <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 truncate shrink-0">
-            {activeDate}
-          </h2>
+        <div className="shrink-0 flex items-center justify-between gap-3 px-5 h-[52px] border-b border-neutral-200/60 dark:border-neutral-700/40 dark:bg-[#2a2a2a]">
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors p-1.5 -ml-2 rounded-md hover:bg-neutral-200/60 dark:hover:bg-neutral-700/50 active:scale-95"
+              title={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <line x1="9" y1="3" x2="9" y2="21" />
+              </svg>
+            </button>
+            <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 truncate shrink-0">
+              {activeDate}
+            </h2>
+          </div>
           <div className="flex items-center gap-2.5 shrink-0">
-            {/* Status pill */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot}`} />
-              <span className="text-[11px] text-neutral-400 dark:text-neutral-500 truncate max-w-[120px]">
-                {statusText}
-              </span>
-            </div>
             {/* Action buttons */}
-            <div className="flex items-center gap-1.5 ml-1">
+            <div className="flex items-center gap-1.5 min-w-0">
               <button
                 onClick={handlePullFromGithub}
                 disabled={syncStatus === "saving" || isPulling || isLoading}
-                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-[0.97]"
+                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-neutral-200 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-[0.97]"
                 title="Pull latest from GitHub"
               >
                 ↓ Pull
@@ -465,7 +519,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
               <button
                 onClick={handlePushToGithub}
                 disabled={syncStatus === "synced" || syncStatus === "saving" || isPulling || isLoading}
-                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-[0.97] shadow-sm"
+                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-neutral-800 dark:bg-neutral-600 text-white hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-[0.97] shadow-sm"
                 title="Push to GitHub"
               >
                 ↑ Push
@@ -478,7 +532,7 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
         <div className="relative flex-1 min-h-0">
           <textarea
             style={{ width: "100%", height: "100%" }}
-            className={`absolute inset-0 px-6 py-5 bg-transparent border-none focus:outline-none focus:ring-0 resize-none font-mono text-[14px] leading-[1.75] text-neutral-700 dark:text-neutral-300 placeholder:text-neutral-300 dark:placeholder:text-neutral-700 transition-opacity duration-200 ${isLoading ? "opacity-0" : "opacity-100"}`}
+            className={`absolute inset-0 px-6 pt-5 pb-12 bg-transparent border-none focus:outline-none focus:ring-0 resize-none font-mono text-[14px] leading-[1.75] text-neutral-700 dark:text-neutral-300 placeholder:text-neutral-300 dark:placeholder:text-neutral-700 transition-opacity duration-200 ${isLoading ? "opacity-0" : "opacity-100"}`}
             placeholder="Start writing..."
             value={isLoading ? "" : content}
             onChange={handleChange}
@@ -486,12 +540,20 @@ export function VaultDashboard({ onVaultLoaded }: { onVaultLoaded?: (exists: boo
           />
           {isLoading && (
             <div className="absolute inset-0 px-6 py-5 space-y-3.5 animate-pulse pointer-events-none">
-              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-3/4" />
-              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-full" />
-              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-5/6" />
-              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-800/60 rounded-full w-1/2" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-700/50 rounded-full w-3/4" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-700/50 rounded-full w-full" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-700/50 rounded-full w-5/6" />
+              <div className="h-3.5 bg-neutral-100 dark:bg-neutral-700/50 rounded-full w-1/2" />
             </div>
           )}
+
+          {/* Status pill (Bottom Left) */}
+          <div className={`absolute bottom-3 left-6 flex items-center gap-2 min-w-0 pointer-events-none transition-opacity duration-300 rounded pb-1 ${isLoading ? 'opacity-0' : 'opacity-100'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot}`} />
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-neutral-400/80 dark:text-neutral-500/80 truncate">
+              {statusText}
+            </span>
+          </div>
         </div>
       </div>
     </div>
