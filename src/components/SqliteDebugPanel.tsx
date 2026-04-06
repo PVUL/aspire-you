@@ -88,8 +88,9 @@ export function SqliteDebugPanel() {
     setIsLoading(true);
     const start = Date.now();
     try {
-      const rows = await execRaw(`SELECT * FROM "${tableName}" LIMIT 200`);
-      const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+      // Inject rowid as a hidden robust reference for deletions
+      const rows = await execRaw(`SELECT rowid as ___rowid, * FROM "${tableName}" LIMIT 200`);
+      const columns = rows.length > 0 ? Object.keys(rows[0]).filter(c => c !== '___rowid') : [];
       setResult({ columns, rows, duration: Date.now() - start });
       setQuery(`SELECT * FROM "${tableName}" LIMIT 200`);
     } catch (e: any) {
@@ -115,8 +116,13 @@ export function SqliteDebugPanel() {
     setIsLoading(true);
     const start = Date.now();
     try {
-      const rowArray = await execRaw(queryToRun);
-      const columns = rowArray.length > 0 ? Object.keys(rowArray[0]) : [];
+      // If it's a simple SELECT *, try to inject rowid
+      let actualQuery = queryToRun;
+      if (/^SELECT\s+\*\s+FROM/i.test(queryToRun)) {
+         actualQuery = queryToRun.replace(/^SELECT\s+\*\s+FROM/i, 'SELECT rowid as ___rowid, * FROM');
+      }
+      const rowArray = await execRaw(actualQuery);
+      const columns = rowArray.length > 0 ? Object.keys(rowArray[0]).filter(c => c !== '___rowid') : [];
       setResult({ columns, rows: rowArray, duration: Date.now() - start });
       setQueryHistory((prev) => [queryToRun, ...prev.filter((h) => h !== queryToRun)].slice(0, 20));
       setHistoryIndex(-1);
@@ -127,6 +133,19 @@ export function SqliteDebugPanel() {
       setIsLoading(false);
     }
   }, [query, loadTables]);
+
+  const handleDeleteRows = useCallback(async (rowsToDelete: Row[]) => {
+      if (!selectedTable) return;
+      try {
+        const ids = rowsToDelete.map(r => Number(r['___rowid'])).filter(id => !isNaN(id));
+        if (ids.length > 0) {
+           await execRaw(`DELETE FROM "${selectedTable}" WHERE rowid IN (${ids.join(',')})`);
+           runQuery(); // refresh current view
+        }
+      } catch (e: any) {
+        alert("Failed to delete records: " + e.message);
+      }
+  }, [selectedTable, runQuery]);
 
   const refreshQuerySilent = useCallback(async () => {
     if (!query.trim()) return;
@@ -371,7 +390,7 @@ export function SqliteDebugPanel() {
                     Select a table from the sidebar or write a query
                   </div>
                 ) : (
-                  <ResultPane result={result} isLoading={isLoading} onExportJSON={exportJSON} onExportCSV={exportCSV} formatCell={formatCell} />
+                  <ResultPane result={result} isLoading={isLoading} onExportJSON={exportJSON} onExportCSV={exportCSV} formatCell={formatCell} onDeleteRows={handleDeleteRows} canDelete={!!selectedTable && query.toUpperCase().includes('SELECT * FROM')} />
                 )}
               </div>
             )}
@@ -382,13 +401,31 @@ export function SqliteDebugPanel() {
   );
 }
 
-function ResultPane({ result, isLoading, onExportJSON, onExportCSV, formatCell }: {
+function ResultPane({ result, isLoading, onExportJSON, onExportCSV, formatCell, onDeleteRows, canDelete }: {
   result: QueryResult | null;
   isLoading: boolean;
   onExportJSON: () => void;
   onExportCSV: () => void;
   formatCell: (v: unknown) => string;
+  onDeleteRows: (rows: Row[]) => void;
+  canDelete: boolean;
 }) {
+  const [selectedIndexes, setSelectedIndexes] = useState<Set<number>>(new Set());
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+
+  // Clear selection if result changes
+  useEffect(() => {
+    setSelectedIndexes(new Set());
+    setIsConfirmingDelete(false);
+  }, [result]);
+
+  const toggleRow = (idx: number) => {
+    const newSet = new Set(selectedIndexes);
+    if (newSet.has(idx)) newSet.delete(idx);
+    else newSet.add(idx);
+    setSelectedIndexes(newSet);
+  };
+
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center text-[#5e5e5e] text-[11px]">
@@ -427,7 +464,22 @@ function ResultPane({ result, isLoading, onExportJSON, onExportCSV, formatCell }
     <div className="flex flex-col flex-1 overflow-hidden">
       {/* Result toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#3a3a3a] shrink-0 bg-[#181818]">
-        <span className="text-[10px] text-[#5e5e5e]">{result.rows.length} rows · {result.duration}ms</span>
+        <div className="flex items-center gap-4">
+           <span className="text-[10px] text-[#5e5e5e]">{result.rows.length} rows · {result.duration}ms</span>
+           {canDelete && selectedIndexes.size > 0 && (
+             <div className="flex items-center gap-2 border-l border-[#3a3a3a] pl-4">
+               {isConfirmingDelete ? (
+                 <>
+                   <span className="text-[10px] text-[#f87171] font-semibold">Delete {selectedIndexes.size} record{selectedIndexes.size > 1 ? 's' : ''}?</span>
+                   <button onClick={() => { onDeleteRows(Array.from(selectedIndexes).map(i => result.rows[i])); setIsConfirmingDelete(false); }} className="text-[10px] text-white bg-[#dc2626] hover:bg-[#b91c1c] px-2 py-0.5 rounded transition-colors shadow-sm">Yes</button>
+                   <button onClick={() => setIsConfirmingDelete(false)} className="text-[10px] text-[#a0a0a0] hover:bg-[#2a2a2a] px-2 py-0.5 rounded transition-colors">No</button>
+                 </>
+               ) : (
+                 <button onClick={() => setIsConfirmingDelete(true)} className="text-[10px] text-[#f87171] hover:text-[#fca5a5] hover:bg-[#3f1919] px-2 py-0.5 rounded transition-colors font-medium">Delete Selected ({selectedIndexes.size})</button>
+               )}
+             </div>
+           )}
+        </div>
         <div className="flex items-center gap-2">
           <button onClick={onExportJSON}
             className="text-[10px] text-[#6e6e6e] hover:text-[#a0a0a0] px-2 py-0.5 rounded border border-[#333] hover:border-[#444] transition-colors">
@@ -445,6 +497,7 @@ function ResultPane({ result, isLoading, onExportJSON, onExportCSV, formatCell }
         <table className="w-full border-collapse text-[11px]">
           <thead className="sticky top-0 bg-[#222] z-10">
             <tr>
+              {canDelete && <th className="text-center px-2 py-1.5 border-b border-[#303030] w-8"></th>}
               <th className="text-left px-3 py-1.5 text-[#6e6e6e] font-semibold border-b border-[#303030] w-8 text-center">#</th>
               {result.columns.map((col) => (
                 <th key={col} className="text-left px-3 py-1.5 text-[10px] font-semibold text-[#60a5fa] border-b border-[#303030] whitespace-nowrap uppercase tracking-wider">
@@ -455,8 +508,18 @@ function ResultPane({ result, isLoading, onExportJSON, onExportCSV, formatCell }
           </thead>
           <tbody>
             {result.rows.map((row, i) => (
-              <tr key={i} className="hover:bg-[#232323] group border-b border-[#111] transition-colors">
-                <td className="px-3 py-1.5 text-[#4e4e4e] text-center text-[10px] group-hover:text-[#5e5e5e]">{i + 1}</td>
+              <tr key={i} className={`group border-b border-[#111] transition-colors ${selectedIndexes.has(i) ? 'bg-[#1e1b19] border-l-2 border-[#ea580c]' : 'hover:bg-[#232323]'}`}>
+                {canDelete && (
+                  <td className="px-2 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
+                    <input 
+                      type="checkbox" 
+                      checked={selectedIndexes.has(i)} 
+                      onChange={() => toggleRow(i)}
+                      className="w-3 h-3 bg-transparent border-2 border-[#555] rounded-sm checked:bg-[#fb923c] checked:border-[#fb923c] outline-none cursor-pointer"
+                    />
+                  </td>
+                )}
+                <td className="px-3 py-1.5 text-[#4e4e4e] text-center text-[10px] group-hover:text-[#5e5e5e] truncate break-all w-8 cursor-pointer" onClick={() => canDelete && toggleRow(i)}>{i + 1}</td>
                 {result.columns.map((col) => {
                   const val = row[col];
                   const isNull = val === null || val === undefined;
