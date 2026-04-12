@@ -16,7 +16,7 @@ Your data lives in your browser and your GitHub. No third-party servers hold you
 |---|---|
 | Frontend | Vite + React + TypeScript |
 | Styling | Tailwind CSS v4 |
-| Auth | Clerk (email OTP) + Nhost (backend JWT) |
+| Auth | Nhost |
 | Client DB | `sqlocal` — SQLite WASM via OPFS |
 | Backend | Nhost Serverless Functions (Express) |
 | GitHub Sync | Octokit (`@octokit/rest`) |
@@ -25,7 +25,6 @@ Your data lives in your browser and your GitHub. No third-party servers hold you
 
 ### Prerequisites
 - [Nhost CLI](https://docs.nhost.io/local-development) installed
-- A [Clerk](https://clerk.com) app with email OTP enabled
 - A GitHub OAuth App (callback: `http://localhost:3000/callback`)
 
 ### Setup
@@ -37,7 +36,6 @@ Your data lives in your browser and your GitHub. No third-party servers hold you
 
 2. Fill in your `.env.local`:
    ```bash
-   VITE_CLERK_PUBLISHABLE_KEY="pk_test_..."
    VITE_NHOST_SUBDOMAIN="local"
    VITE_NHOST_REGION="local"
    VITE_GITHUB_CLIENT_ID="..."

@@ -13,6 +13,7 @@
 - "!include auth_users.yaml"
 - "!include public_app_settings.yaml"
 - "!include public_communities.yaml"
+- "!include public_community_current_values.yaml"
 - "!include public_community_members.yaml"
 - "!include public_edges.yaml"
 - "!include public_missions.yaml"

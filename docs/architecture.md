@@ -5,7 +5,7 @@
 ```
 Browser                          Nhost (local / cloud)         GitHub
 ─────────────────────────────    ──────────────────────────    ──────────────────
-Clerk Login (email OTP)
+Clerk Login (email OTP) ◄── (update 2026APR12 - we no longer use clerk)
   │
   └─► /nhost-fn/auth/session ──► Mint long-lived Nhost JWT
                                    │

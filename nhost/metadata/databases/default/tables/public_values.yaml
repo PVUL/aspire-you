@@ -6,7 +6,7 @@ insert_permissions:
     permission:
       check: {}
       columns:
-        - core_term
+        - name
         - description
         - applicable_to
 select_permissions:
@@ -14,7 +14,7 @@ select_permissions:
     permission:
       columns:
         - id
-        - core_term
+        - name
         - description
         - applicable_to
         - created_at
@@ -23,7 +23,7 @@ select_permissions:
     permission:
       columns:
         - id
-        - core_term
+        - name
         - description
         - applicable_to
         - created_at

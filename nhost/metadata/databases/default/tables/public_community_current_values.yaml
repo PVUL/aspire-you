@@ -1,0 +1,22 @@
+table:
+  name: community_current_values
+  schema: public
+select_permissions:
+  - role: public
+    permission:
+      columns:
+        - community_id
+        - value_id
+        - name
+        - description
+        - start_date
+      filter: {}
+  - role: user
+    permission:
+      columns:
+        - community_id
+        - value_id
+        - name
+        - description
+        - start_date
+      filter: {}

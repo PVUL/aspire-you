@@ -18,7 +18,7 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin',
       // 'credentialless' allows cross-origin resources (Clerk, etc.) to load
       // while still enabling SharedArrayBuffer/OPFS
-      'Cross-Origin-Embedder-Policy': 'credentialless',
+      // 'Cross-Origin-Embedder-Policy': 'credentialless',
     },
     proxy: {
       // Nhost local functions run behind traefik on port 443 (HTTPS).
