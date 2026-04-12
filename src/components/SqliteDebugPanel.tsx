@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAuthenticationStatus } from "@nhost/react";
-import { sql as dbSql, execRaw } from "@/lib/localDb";
+import { useLocation } from "react-router-dom";
+import { sql as dbSql, execRaw, initDb } from "@/lib/localDb";
 import { fetchInterceptor, type ApiCall } from "@/lib/devFetchInterceptor";
 import { getUiState, patchUiState } from "@/lib/uiState";
 
@@ -21,6 +22,7 @@ const MAX_HEIGHT = typeof window !== "undefined" ? window.innerHeight * 0.85 : 7
 
 export function SqliteDebugPanel() {
   const { isAuthenticated } = useAuthenticationStatus();
+  const location = useLocation();
   const [isOpen, setIsOpen] = useState(() => getUiState().debugOpen ?? false);
   const [height, setHeight] = useState(() => getUiState().debugHeight ?? DEFAULT_HEIGHT);
 
@@ -34,7 +36,7 @@ export function SqliteDebugPanel() {
     patchUiState({ debugHeight: height });
   }, [height]);
   const [tables, setTables] = useState<string[]>([]);
-  const [selectedTable, setSelectedTable] = useState<string | null>("entries");
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [activeTab, setActiveTab] = useState<"Browser SQLite" | "Network">("Browser SQLite");
@@ -45,6 +47,9 @@ export function SqliteDebugPanel() {
   const [selectedCall, setSelectedCall] = useState<ApiCall | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
+  // Track whether user deliberately picked a table vs auto-defaulted
+  const userPickedTable = useRef(false);
+  const lastPathForDefault = useRef<string | null>(null);
 
   const visibleCallCount = showSessions
     ? apiCalls.length
@@ -56,6 +61,7 @@ export function SqliteDebugPanel() {
   // Load table list
   const loadTables = useCallback(async () => {
     try {
+      await initDb();
       const rows = await dbSql`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name` as Row[];
       setTables(rows.map((r) => String(r.name)));
     } catch (e) {
@@ -83,7 +89,8 @@ export function SqliteDebugPanel() {
   }, [activeTab, apiCalls, showSessions]);
 
   // Browse table
-  const browseTable = useCallback(async (tableName: string) => {
+  const browseTable = useCallback(async (tableName: string, fromUser = false) => {
+    if (fromUser) userPickedTable.current = true;
     setSelectedTable(tableName);
     setIsLoading(true);
     const start = Date.now();
@@ -101,13 +108,22 @@ export function SqliteDebugPanel() {
   }, []);
 
   useEffect(() => {
-    if (isOpen) {
-      loadTables();
-      if (selectedTable === "entries" && !result) {
-        browseTable("entries");
-      }
+    if (!isOpen) return;
+    loadTables();
+    const defaultTable = location.pathname.startsWith("/communities") ? "local_communities" : "entries";
+    // Only auto-switch when:
+    //   1. Panel just opened with no table selected yet
+    //   2. Page context changed (different pathname) — even if user previously picked something
+    const pathChanged = lastPathForDefault.current !== location.pathname;
+    if (!selectedTable || (pathChanged && !userPickedTable.current)) {
+      lastPathForDefault.current = location.pathname;
+      browseTable(defaultTable);
+    } else if (pathChanged) {
+      // Context changed but user had explicitly picked — still update the ref so next auto-open respects new context
+      lastPathForDefault.current = location.pathname;
+      userPickedTable.current = false; // reset so next open picks the new context default
     }
-  }, [isOpen, loadTables, browseTable, selectedTable, result]);
+  }, [isOpen, location.pathname]); // deliberately minimal deps — no result/selectedTable
 
   // Run SQL query
   const runQuery = useCallback(async (q?: string) => {
@@ -331,7 +347,7 @@ export function SqliteDebugPanel() {
                   <div className="px-4 py-3 text-[#5e5e5e] text-[11px]">No tables found</div>
                 ) : (
                   tables.map((t) => (
-                    <button key={t} onClick={() => { browseTable(t); }}
+                    <button key={t} onClick={() => browseTable(t, true)}
                       className={`w-full text-left px-4 py-2.5 text-[11px] transition-colors flex items-center gap-2 ${
                         selectedTable === t
                           ? "bg-[#1e3360] text-[#60a5fa] border-l-2 border-[#3b82f6]"

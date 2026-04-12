@@ -6,7 +6,7 @@ select_permissions:
     permission:
       columns:
         - community_id
-        - value_id
+        - id
         - name
         - description
         - start_date
@@ -15,7 +15,7 @@ select_permissions:
     permission:
       columns:
         - community_id
-        - value_id
+        - id
         - name
         - description
         - start_date

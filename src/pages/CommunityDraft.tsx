@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useNhostClient, useUserData, useAuthenticationStatus, useAccessToken } from "@nhost/react";
 import { sql } from "@/lib/localDb";
+import { getGithubState, patchGithubState } from "@/lib/uiState";
 
 export default function CommunityDraft() {
   const { slug: existingSlug } = useParams();
@@ -62,7 +63,7 @@ export default function CommunityDraft() {
     loadHydrationData();
   }, [existingSlug, isAuthenticated, user, draftId]);
 
-  const [githubUsername, setGithubUsername] = useState<string | null>(() => localStorage.getItem('aspire_gh_username'));
+  const [githubUsername, setGithubUsername] = useState<string | null>(() => getGithubState().username || null);
 
   useEffect(() => {
     if (!isAuthenticated || !accessToken || githubUsername) return;
@@ -73,8 +74,8 @@ export default function CommunityDraft() {
       .then(res => res.json())
       .then(data => {
         if (data.username) {
-           setGithubUsername(data.username);
-           localStorage.setItem('aspire_gh_username', data.username);
+          setGithubUsername(data.username);
+          patchGithubState({ username: data.username });
         }
       })
       .catch(err => console.error("Could not load github username", err));
@@ -149,8 +150,10 @@ export default function CommunityDraft() {
     setValues(values.filter(x => x !== v));
   };
 
+  const isPublishingRef = useRef(false);
+
   const saveLocalDraft = useCallback(async () => {
-    if (!repoSlug) return;
+    if (!repoSlug || isPublishingRef.current || !sessionStorage.getItem('activeDraftId')) return;
     setIsSaving(true);
     try {
       const draftContent = JSON.stringify({ displayName, repoSlug, missions, values, slugAvailable });
@@ -189,6 +192,7 @@ export default function CommunityDraft() {
     if (!canPublish) return;
 
     setIsPublishing(true);
+    isPublishingRef.current = true;
     try {
       const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
 
@@ -249,6 +253,7 @@ type: community
 id: ${newCommId}
 name: ${displayName}
 joined_at: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
+role: owner
 ---
 
 # ${displayName} (@${repoSlug})
@@ -264,7 +269,9 @@ ${realMissions.length ? `\n## Missions\n` + realMissions.map((m: string) => `- $
       });
 
       // 6. Cleanup draft SQLite row, insert live community row
+      // Delete by exact slug and also by content LIKE pattern (belt-and-suspenders)
       await sql`DELETE FROM local_communities WHERE slug = ${'draft-' + draftId}`;
+      await sql`DELETE FROM local_communities WHERE slug LIKE ${'draft-%'} AND content LIKE ${'%"repoSlug":"' + repoSlug + '"%'}`;
       sessionStorage.removeItem('activeDraftId');
 
       await sql`
@@ -272,7 +279,10 @@ ${realMissions.length ? `\n## Missions\n` + realMissions.map((m: string) => `- $
          VALUES (${repoSlug}, ${mdContent}, NULL, ${Date.now()}, ${Date.now()})
       `;
 
-      // Navigate to live community hub for now, wait until live route is built
+      // Signal any listeners (debug panel, Communities page) that SQLite changed
+      window.dispatchEvent(new CustomEvent('sqlite-mutation'));
+
+      // Navigate to live community hub
       navigate(`/communities`, { replace: true });
 
     } catch (err: any) {
@@ -280,6 +290,7 @@ ${realMissions.length ? `\n## Missions\n` + realMissions.map((m: string) => `- $
       setErrorMsg(err.message || "An unexpected error occurred during publish.");
     } finally {
       setIsPublishing(false);
+      isPublishingRef.current = false;
     }
   };
 
@@ -287,7 +298,7 @@ ${realMissions.length ? `\n## Missions\n` + realMissions.map((m: string) => `- $
   if (!isAuthenticated) return <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-[#1a1a1a] text-neutral-500">Please sign in.</div>;
 
   return (
-    <main className="min-h-screen flex flex-col bg-neutral-50 dark:bg-[#111111]">
+    <main className="min-h-screen flex flex-col transition-colors duration-300">
       {/* ── Top Navigation ── */}
       <nav className="shrink-0 flex items-center justify-between px-6 h-14 border-b border-neutral-200/60 dark:border-neutral-800/60 bg-white/80 dark:bg-[#191919] backdrop-blur-sm sticky top-0 z-50">
         <div className="flex items-center gap-3">

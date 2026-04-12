@@ -2,11 +2,18 @@ table:
   name: communities
   schema: public
 object_relationships:
-  - name: current_mission
+  - name: mission
     using:
       foreign_key_constraint_on: current_mission_id
 array_relationships:
-  - name: current_values
+  - name: members
+    using:
+      foreign_key_constraint_on:
+        column: community_id
+        table:
+          name: community_members
+          schema: public
+  - name: values
     using:
       manual_configuration:
         column_mapping:
@@ -15,6 +22,12 @@ array_relationships:
         remote_table:
           name: community_current_values
           schema: public
+computed_fields:
+  - name: member_count
+    definition:
+      function:
+        name: member_count
+        schema: public
 insert_permissions:
   - role: user
     permission:
@@ -34,6 +47,8 @@ select_permissions:
         - is_public
         - created_at
         - current_mission_id
+      computed_fields:
+        - member_count
       filter:
         is_public:
           _eq: true
@@ -46,4 +61,6 @@ select_permissions:
         - is_public
         - created_at
         - current_mission_id
+      computed_fields:
+        - member_count
       filter: {}

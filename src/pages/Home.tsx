@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useNhostClient, useUserData, useAuthenticationStatus, useSignOut, useSignInEmailOTP } from "@nhost/react";
+import { useNhostClient, useUserData, useAuthenticationStatus, useSignOut, useSignInEmailOTP, useAccessToken } from "@nhost/react";
 import { VaultDashboard } from "@/components/VaultDashboard";
-import { getUiState, patchUiState } from "@/lib/uiState";
+import { getUiState, patchUiState, getGithubState, patchGithubState } from "@/lib/uiState";
 
 type ToastType = "error" | "info" | "success";
 function Toast({ message, type, onDismiss }: { message: string; type: ToastType; onDismiss: () => void }) {
@@ -93,6 +93,7 @@ export default function Home() {
   const { isAuthenticated, isLoading: isAuthLoading } = useAuthenticationStatus();
   const user = useUserData();
   const nhost = useNhostClient();
+  const accessToken = useAccessToken();
   const { signOut } = useSignOut();
   const {
     signInEmailOTP,
@@ -105,9 +106,13 @@ export default function Home() {
 
   const [provisioning, setProvisioning] = useState(false);
   const [vaultStatus, setVaultStatus] = useState<string | null>(null);
-  const [vaultMeta, setVaultMeta] = useState<{ exists: boolean; url: string } | null>(null);
-  const [githubConnected, setGithubConnected] = useState(false);
-  const [githubStatusLoading, setGithubStatusLoading] = useState(true);
+  const [vaultMeta, setVaultMeta] = useState<{ exists: boolean; url: string } | null>(() => {
+    const gh = getGithubState();
+    return gh.vaultUrl ? { exists: true, url: gh.vaultUrl } : null;
+  });
+  const [githubConnected, setGithubConnected] = useState(() => getGithubState().connected);
+  const [githubUsername, setGithubUsername] = useState(() => getGithubState().username);
+  const [githubStatusLoading, setGithubStatusLoading] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectConfirm, setDisconnectConfirm] = useState(false);
 
@@ -139,6 +144,23 @@ export default function Home() {
   useEffect(() => {
     patchUiState({ settingsOpen: isSettingsOpen });
   }, [isSettingsOpen]);
+
+  useEffect(() => {
+    if (githubConnected && accessToken && !githubUsername) {
+      const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+      fetch(`${backendUrl}/vault/github_user`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.username) {
+            patchGithubState({ username: data.username });
+            setGithubUsername(data.username);
+          }
+        })
+        .catch(err => console.error("Could not load github username", err));
+    }
+  }, [githubConnected, accessToken, nhost.functions.url, githubUsername]);
 
   useEffect(() => {
     patchUiState({ dashboardExpanded: isExpanded });
@@ -174,51 +196,14 @@ export default function Home() {
   }, [otpIsError, otpError, showToast, email]);
 
   useEffect(() => {
-    let active = true;
-
-    async function checkStatus() {
-      if (!isAuthenticated) return;
-      setGithubStatusLoading(true);
-      try {
-        const token = nhost.auth.getAccessToken();
-        const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
-        const res = await fetch(`${backendUrl}/github/status`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (active && res.ok) {
-          const data: any = await res.json();
-          setGithubConnected(data.connected);
-
-          if (data.vaultExists) {
-            setVaultMeta({ exists: true, url: data.vaultUrl });
-            setVaultStatus(`✅ Vault ready (${data.vaultUrl})`);
-          } else if (data.connected) {
-            setVaultMeta({ exists: false, url: "" });
-            setVaultStatus("✅ GitHub connected. Ready to create vault.");
-          } else {
-            setVaultMeta({ exists: false, url: "" });
-            setVaultStatus(null);
-          }
-        }
-      } catch (e) {
-        console.error("Status check failed", e);
-      } finally {
-        if (active) setGithubStatusLoading(false);
-      }
-    }
-
-    checkStatus();
+    if (!isAuthenticated) return;
 
     // Check URL params for GitHub OAuth callback result
     const params = new URLSearchParams(window.location.search);
     const ghStatus = params.get("github");
     if (ghStatus === "connected") {
       setGithubConnected(true);
+      patchGithubState({ connected: true });
       setVaultStatus("✅ GitHub connected! You can now create your vault.");
       // Clean URL
       window.history.replaceState({}, "", window.location.pathname);
@@ -226,9 +211,7 @@ export default function Home() {
       setVaultStatus("❌ Failed to connect GitHub. Please try again.");
       window.history.replaceState({}, "", window.location.pathname);
     }
-
-    return () => { active = false; };
-  }, [isAuthenticated, nhost.auth, nhost.functions.url]);
+  }, [isAuthenticated]);
 
   const handleVaultLoaded = useCallback((exists: boolean, url: string) => {
     setVaultMeta({ exists, url });
@@ -267,6 +250,8 @@ export default function Home() {
       });
       if (res.ok) {
         setGithubConnected(false);
+        setGithubUsername(null);
+        patchGithubState({ connected: false, username: undefined, vaultUrl: undefined });
         setVaultMeta(null);
         setVaultStatus(null);
       }
@@ -290,7 +275,9 @@ export default function Home() {
         setGithubConnected(false);
       } else if (data && data.success) {
         setVaultStatus(`✅ ${data.message} (${data.repo})`);
-        setVaultMeta({ exists: true, url: `https://github.com/${user?.displayName}/${data.repo}` }); // Speculative until sync overrides
+        const url = `https://github.com/${getGithubState().username || user?.displayName}/${data.repo}`;
+        setVaultMeta({ exists: true, url }); // Speculative until sync overrides
+        patchGithubState({ vaultUrl: url });
       } else {
         setVaultStatus(`❌ Error: ${data?.error || "Failed to provision"}`);
       }
@@ -304,6 +291,8 @@ export default function Home() {
   const showSkeleton = isAuthLoading;
   const showSignedOut = !showSkeleton && !isAuthenticated;
   const showDashboard = !showSkeleton && isAuthenticated;
+
+  const resolvedVaultUrl = vaultMeta?.url || ((githubConnected && githubUsername) ? `https://github.com/${githubUsername}/aspire-vault` : undefined);
 
   return (
     <main className="min-h-screen flex flex-col transition-colors duration-300">
@@ -409,14 +398,14 @@ export default function Home() {
                 Aspire You
               </h1>
               <a
-                href={vaultMeta?.url || "#"}
-                target={vaultMeta?.url ? "_blank" : undefined}
+                href={resolvedVaultUrl || "#"}
+                target={resolvedVaultUrl ? "_blank" : undefined}
                 rel="noreferrer"
-                className={`text-[11px] font-medium px-2 py-0.5 rounded border transition-all ${vaultMeta?.url
+                className={`text-[11px] font-medium px-2 py-0.5 rounded border transition-all ${resolvedVaultUrl
                   ? "border-neutral-200 dark:border-neutral-700 text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:border-neutral-400 dark:hover:border-neutral-500"
                   : "border-neutral-200/40 dark:border-neutral-800/40 text-neutral-300 dark:text-neutral-700 cursor-default pointer-events-none"
                   }`}
-                onClick={(e) => { if (!vaultMeta?.url) e.preventDefault(); }}
+                onClick={(e) => { if (!resolvedVaultUrl) e.preventDefault(); }}
               >
                 vault ↗
               </a>
@@ -500,9 +489,9 @@ export default function Home() {
                       <p className="text-[11px] text-neutral-400 dark:text-neutral-500 leading-relaxed">
                         {githubConnected ? "Connected — vault syncing enabled." : "Connect to enable vault syncing."}
                       </p>
-                      {vaultMeta?.url && githubConnected && (
+                      {resolvedVaultUrl && githubConnected && (
                         <a
-                          href={vaultMeta.url}
+                          href={resolvedVaultUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-2 text-[11px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors group"
@@ -510,7 +499,7 @@ export default function Home() {
                           <svg className="w-3 h-3 shrink-0 text-neutral-400 group-hover:text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                           </svg>
-                          <span className="truncate font-mono">{vaultMeta.url.replace(/^https?:\/\//, '')}</span>
+                          <span className="truncate font-mono">{resolvedVaultUrl.replace(/^https?:\/\//, '')}</span>
                         </a>
                       )}
                     </div>

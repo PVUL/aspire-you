@@ -39,6 +39,7 @@ select_permissions:
                 - member_of
                 - embodies_value
                 - adopts_mission
+                - community_status_change
       allow_aggregations: true
 delete_permissions:
   - role: user

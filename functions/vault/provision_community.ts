@@ -108,8 +108,8 @@ export default async function provisionCommunity(req: Request, res: Response) {
 
     // Prepare content strings
     const readmeContent = `# ${name}\n\nAn \`aspire.you\` community.`;
-    const missionsContent = missions?.length ? missions.map((m: any) => `- ${m}\n`).join('') : 'No missions defined.';
-    const valuesContent = values?.length ? values.map((v: any) => `- **${v.term}**: ${v.description || ''}\n`).join('') : 'No core values defined.';
+    const missionsContent = missions?.length ? missions.map((m: any) => `${m}\n`).join('') : 'No missions defined.';
+    const valuesContent = values?.length ? values.map((v: any) => `- **${v.term}**\n`).join('') : 'No core values defined.';
     const membersContent = `# Members\n\n- @${user.login} (Creator)`;
     const ownersContent = `# Owners\n\n- @${user.login}`;
 
@@ -192,22 +192,40 @@ export default async function provisionCommunity(req: Request, res: Response) {
       return r.json();
     };
 
-    // 1. Insert community
+    // 1. Insert community (status defaults to 'active')
     const commRes: any = await adminGql(
       `mutation CreateComm($name: String!, $slug: String!) {
-        insert_communities_one(object: {name: $name, slug: $slug, is_public: true}) { id }
+        insert_communities_one(object: {name: $name, slug: $slug, is_public: true, status: "active"}) { id }
       }`,
       { name, slug }
     );
     const communityId: string | null = commRes.data?.insert_communities_one?.id ?? null;
 
     if (communityId) {
-      // 2. Owner edge (source_id = userId, target_id = communityId)
-      await adminGql(
-        `mutation OwnerEdge($src: uuid!, $tgt: uuid!) {
-          insert_edges_one(object: {source_id: $src, target_id: $tgt, type: "member_of", metadata: {role: "owner"}}) { id }
+      // 2. Owner record directly in community_members
+      const memberRes: any = await adminGql(
+        `mutation OwnerMember($user: uuid!, $comm: uuid!, $meta: jsonb!) {
+          insert_community_members_one(object: {user_id: $user, community_id: $comm, metadata: $meta}) { joined_at }
         }`,
-        { src: userId, tgt: communityId }
+        { user: userId, comm: communityId, meta: { role: 'owner', joined_via: 'creation' } }
+      );
+      if (memberRes.errors) {
+        console.error("Failed to insert owner member record:", JSON.stringify(memberRes.errors));
+      } else {
+        console.log("Owner member inserted:", memberRes.data?.insert_community_members_one?.joined_at);
+      }
+
+      // 3. Founding status_change edge — establishes the status history timeline
+      await adminGql(
+        `mutation StatusEdge($comm: uuid!, $meta: jsonb!) {
+          insert_edges_one(object: {
+            source_id: $comm,
+            target_id: $comm,
+            type: "community_status_change",
+            metadata: $meta
+          }) { id }
+        }`,
+        { comm: communityId, meta: { from: null, to: 'active', reason: 'community_created', changed_by: userId } }
       );
 
       // 3. Missions
@@ -218,11 +236,19 @@ export default async function provisionCommunity(req: Request, res: Response) {
         );
         const mId = mRes.data?.insert_missions_one?.id;
         if (mId) {
+          // Link history edge
           await adminGql(
             `mutation LinkMission($src: uuid!, $tgt: uuid!) {
               insert_edges_one(object: {source_id: $src, target_id: $tgt, type: "adopts_mission", metadata: {}}) { id }
             }`,
             { src: communityId, tgt: mId }
+          );
+          // Set current mission fast-pointer
+          await adminGql(
+            `mutation SetCurrentMission($comm: uuid!, $mission: uuid!) {
+              update_communities_by_pk(pk_columns: {id: $comm}, _set: {current_mission_id: $mission}) { id }
+            }`,
+            { comm: communityId, mission: mId }
           );
         }
       }
@@ -231,7 +257,7 @@ export default async function provisionCommunity(req: Request, res: Response) {
       for (const v of (values || [])) {
         const term = typeof v === 'string' ? v : v.term;
         const vRes: any = await adminGql(
-          `mutation CreateValue($term: String!) { insert_values_one(object: {core_term: $term, description: ""}) { id } }`,
+          `mutation CreateValue($term: String!) { insert_values_one(object: {name: $term, description: ""}) { id } }`,
           { term }
         );
         const vId = vRes.data?.insert_values_one?.id;
@@ -246,9 +272,9 @@ export default async function provisionCommunity(req: Request, res: Response) {
       }
     }
 
-    return res.status(200).json({ 
-      success: true, 
-      message: "Community repository created", 
+    return res.status(200).json({
+      success: true,
+      message: "Community repository created",
       repo: slug,
       community_id: communityId,
       commit_sha: commitRes.data.sha,
@@ -258,7 +284,7 @@ export default async function provisionCommunity(req: Request, res: Response) {
   } catch (error: any) {
     console.error("Community Provisioning API Error:", error);
     if (error.code === 'UND_ERR_CONNECT_TIMEOUT' || error.message?.includes('timeout')) {
-       return res.status(504).json({ error: "Connection Timeout Error connecting to GitHub. Please try again.", code: "TIMEOUT" });
+      return res.status(504).json({ error: "Connection Timeout Error connecting to GitHub. Please try again.", code: "TIMEOUT" });
     }
     return res.status(500).json({ error: "Internal Server Error", details: error.message });
   }

@@ -1,16 +1,43 @@
 table:
   name: community_members
   schema: public
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        user_id:
+          _eq: X-Hasura-User-Id
+      set:
+        user_id: X-Hasura-User-Id
+      columns:
+        - community_id
+        - metadata
 select_permissions:
   - role: user
     permission:
       columns:
-        - edge_id
+        - id
         - user_id
         - community_id
         - joined_at
         - metadata
+      filter: {}
+      allow_aggregations: true
+    comment: Users can see memberships for aggregations
+update_permissions:
+  - role: user
+    permission:
+      columns:
+        - metadata
       filter:
         user_id:
           _eq: X-Hasura-User-Id
-    comment: Users can see their own memberships
+      check:
+        user_id:
+          _eq: X-Hasura-User-Id
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        user_id:
+          _eq: X-Hasura-User-Id

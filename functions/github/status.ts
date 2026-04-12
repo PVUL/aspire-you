@@ -44,7 +44,7 @@ export default async function githubStatus(req: Request, res: Response) {
       },
       body: JSON.stringify({
         query: `
-          query GetGithubConnection($userId: String!) {
+          query GetGithubConnection($userId: uuid!) {
             user_vault_connections_by_pk(user_id: $userId, provider: "github") {
               user_id
               access_token

@@ -115,41 +115,6 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
       } catch (e) {
         if (active) setIsReady(true);
       }
-
-      // Background sync with GitHub (only if connected)
-      if (githubConnected) try {
-        const token = accessToken;
-        if (!token) return;
-
-        const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
-        const res = await fetch(`${backendUrl}/vault/list`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json"
-          }
-        });
-        if (res.ok && active) {
-          const data = await res.json();
-          if (onVaultLoaded) {
-            onVaultLoaded(data.vaultExists, data.githubUrl);
-          }
-
-          const githubFiles = data.files.map((f: any) => ({ date: f.date, sha: f.sha }));
-
-          // Merge local and GitHub
-          const merged = new Map<string, { date: string, sha: string | null }>();
-          localEntries.forEach(e => merged.set(e.date, e));
-          githubFiles.forEach((f: any) => {
-            if (!merged.has(f.date)) merged.set(f.date, f);
-            else merged.set(f.date, { ...merged.get(f.date)!, sha: f.sha });
-          });
-
-          const newEntries = Array.from(merged.values()).sort((a, b) => b.date.localeCompare(a.date));
-          if (active) setEntries(newEntries);
-        }
-      } catch (e) {
-        // ignore
-      }
     }
     setup();
     return () => { active = false; };
@@ -197,8 +162,13 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
             setSyncStatus("synced");
 
             await sql`
-              INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+              INSERT INTO entries (date, content, sha, last_synced_at, updated_at)
               VALUES (${activeDate}, ${fetchedContent}, ${fetchedSha}, ${Date.now()}, ${Date.now()})
+              ON CONFLICT(date) DO UPDATE SET 
+                content = excluded.content, 
+                sha = excluded.sha, 
+                last_synced_at = excluded.last_synced_at, 
+                updated_at = excluded.updated_at
             `;
           } else if (active) {
             setContent("");
@@ -221,8 +191,13 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
   const autoSaveToLocalDb = useDebouncedCallback(async (date: string, text: string, currentSha: string | null, syncedAt: number | null) => {
     try {
       await sql`
-        INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+        INSERT INTO entries (date, content, sha, last_synced_at, updated_at)
         VALUES (${date}, ${text}, ${currentSha}, ${syncedAt}, ${Date.now()})
+        ON CONFLICT(date) DO UPDATE SET 
+          content = excluded.content, 
+          sha = excluded.sha, 
+          last_synced_at = excluded.last_synced_at, 
+          updated_at = excluded.updated_at
       `;
       setEntries(prev => {
         if (!prev.find(p => p.date === date)) {
@@ -249,6 +224,48 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
     setIsPulling(true);
     try {
       const backendUrl = import.meta.env.DEV ? '/nhost-fn' : nhost.functions.url;
+      
+      // 1. Fetch directory list to sync local view
+      if (githubConnected) {
+        const listRes = await fetch(`${backendUrl}/vault/list`, {
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+        });
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          if (onVaultLoaded) {
+            onVaultLoaded(listData.vaultExists, listData.githubUrl);
+          }
+          
+          const githubFiles = listData.files.map((f: any) => ({ date: f.date, sha: f.sha }));
+          const merged = new Map<string, { date: string, sha: string | null }>();
+          entries.forEach(e => merged.set(e.date, e));
+          
+          let changed = false;
+          for (const f of githubFiles) {
+            if (!merged.has(f.date)) {
+              merged.set(f.date, f);
+              changed = true;
+              await sql`
+                INSERT INTO entries (date, content, sha, last_synced_at, updated_at)
+                VALUES (${f.date}, NULL, ${f.sha}, 0, 0)
+                ON CONFLICT(date) DO UPDATE SET sha = excluded.sha
+              `.catch(() => {});
+            } else {
+              const current = merged.get(f.date)!;
+              if (current.sha !== f.sha) {
+                merged.set(f.date, { ...current, sha: f.sha });
+                changed = true;
+                await sql`UPDATE entries SET sha = ${f.sha} WHERE date = ${f.date}`.catch(() => {});
+              }
+            }
+          }
+          if (changed) {
+             setEntries(Array.from(merged.values()).sort((a, b) => b.date.localeCompare(a.date)));
+          }
+        }
+      }
+
+      // 2. Fetch current file
       const res = await fetch(`${backendUrl}/vault/entry`, {
         method: 'POST',
         headers: {
@@ -268,8 +285,13 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
         setSyncStatus("synced");
 
         await sql`
-          INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+          INSERT INTO entries (date, content, sha, last_synced_at, updated_at)
           VALUES (${activeDate}, ${fetchedContent}, ${fetchedSha}, ${Date.now()}, ${Date.now()})
+          ON CONFLICT(date) DO UPDATE SET 
+            content = excluded.content, 
+            sha = excluded.sha, 
+            last_synced_at = excluded.last_synced_at, 
+            updated_at = excluded.updated_at
         `;
       }
     } catch (e) {
@@ -342,8 +364,13 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
           setSyncStatus("synced");
 
           await sql`
-            INSERT OR REPLACE INTO entries (date, content, sha, last_synced_at, updated_at)
+            INSERT INTO entries (date, content, sha, last_synced_at, updated_at)
             VALUES (${activeDate}, ${content}, ${data.sha}, ${now}, ${now})
+            ON CONFLICT(date) DO UPDATE SET 
+              content = excluded.content, 
+              sha = excluded.sha, 
+              last_synced_at = excluded.last_synced_at, 
+              updated_at = excluded.updated_at
           `;
 
           // Also update the tree list's sha
@@ -464,12 +491,13 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
               return (
                 <div
                   key={entry.date}
-                  className={`group w-full text-left px-3 py-2.5 rounded-lg text-[13px] transition-all flex items-center gap-2.5 ${isActive
+                  onClick={() => setActiveDate(entry.date)}
+                  className={`group cursor-pointer w-full text-left px-3 py-2.5 rounded-lg text-[13px] transition-all flex items-center gap-2.5 ${isActive
                       ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-sm font-medium"
                       : "text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/50"
                     }`}
                 >
-                  <button className="flex-1 flex items-center gap-2.5 min-w-0" onClick={() => setActiveDate(entry.date)}>
+                  <div className="flex-1 flex items-center gap-2.5 min-w-0">
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${isActive ? "bg-white/60 dark:bg-neutral-800/60" : entry.sha ? "bg-emerald-400/70" : "bg-amber-400/70"
                       }`} />
                     <span className="truncate font-mono tracking-tight">{entry.date}</span>
@@ -477,7 +505,7 @@ export function VaultDashboard({ onVaultLoaded, githubConnected }: { onVaultLoad
                       <span className={`ml-auto text-[10px] font-semibold uppercase tracking-wider shrink-0 ${isActive ? "text-white/50 dark:text-neutral-900/50" : "text-neutral-400 dark:text-neutral-600"
                         }`}>today</span>
                     )}
-                  </button>
+                  </div>
                   <button
                     onClick={(e) => { e.stopPropagation(); setDeleteConfirm(entry.date); }}
                     className={`shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60 ${isActive ? "text-white/40 hover:text-white/70" : "text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
