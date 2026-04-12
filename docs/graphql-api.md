@@ -7,8 +7,9 @@ This document provides a brief overview of our Hybrid Data Architecture for Comm
 We shifted from a "pure-edges" graph structure to a hybrid setup that provides O(1) reads for current active elements while preserving our robust temporal/historical tracking. 
 
 * **`communities`**: The core entity.
-  * **Current Mission (`current_mission_id`)**: A direct 1:1 foreign key pointer to `missions.id`. This is dual-written alongside an edge record.
-  * **Current Values (`community_current_values`)**: A purely virtual Postgres View that flattens our many-to-many Nhost schema. It joins `edges` (where `end_date IS NULL`) with `values`.
+  * **Mission (`mission`)**: A direct 1:1 mapped pointer (via `current_mission_id`) to `missions.id`. This is dual-written alongside an edge record.
+  * **Values (`values`)**: A purely virtual Postgres View that flattens our many-to-many Nhost schema. It joins `edges` (where `end_date IS NULL`) with `values`.
+  * **Member Counts (`members_aggregate`)**: We securely use Hasura native GraphQL aggregations to capture exact community member counts natively.
 * **`edges`**: The absolute source of truth for **temporal history**. Missions and Values track their history and lifespan (`start_date`, `end_date`) here.
 * **`community_members`**: The sole unified boundary for all access control and memberships. 
 
@@ -27,17 +28,21 @@ query GetCommunityDashboard($slug: String!) {
     slug
     is_public
     # Fast 1:1 direct lookup
-    current_mission {
+    mission {
       id
       statement
       status
     }
     # Handled securely via Postgres View optimizations
-    current_values {
-      value_id
+    values {
       name
       description
-      start_date
+    }
+    # Aggregations for accurate member counts
+    members_aggregate {
+      aggregate {
+        count
+      }
     }
   }
 }
@@ -73,8 +78,13 @@ query GetUserCommunities($userId: uuid!) {
       id
       name
       slug
-      current_mission {
+      mission {
         statement
+      }
+      members_aggregate {
+        aggregate {
+          count
+        }
       }
     }
   }

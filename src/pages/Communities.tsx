@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import * as v from "valibot";
 import { format } from "date-fns";
 import { sql, initDb } from "@/lib/localDb";
+import { getGithubState } from "@/lib/uiState";
 
 // Example Edge Metadata validation using Valibot
 const EdgeMetadataSchema = v.object({
@@ -53,7 +54,6 @@ const CommunityCard = memo(({ c, isMember, isDraft, index, joiningId, leavingId,
               </button>
             )}
           </div>
-          <p className="text-[12px] font-mono text-neutral-400 dark:text-neutral-500">@{c.slug}</p>
         </div>
 
         {(c.missions?.length > 0 || c.values?.length > 0) && (
@@ -838,9 +838,28 @@ ${missionsStr}${valuesStr}`;
             <div className="p-6 space-y-1">
               {/* Header */}
               <div className="flex items-start justify-between">
-                <div>
-                  <h2 className="text-xl tracking-tight font-bold text-neutral-900 dark:text-neutral-100">{selectedCommunity.name}</h2>
-                  <p className="text-[12px] font-mono text-neutral-400 dark:text-neutral-500 mt-0.5">@{selectedCommunity.slug}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2.5 flex-wrap">
+                    <h2 className="text-xl tracking-tight font-bold text-neutral-900 dark:text-neutral-100">{selectedCommunity.name}</h2>
+                    {(() => {
+                      const ghUser = getGithubState().username;
+                      const isOwned = myHostedCommunities.some(c => c.id === selectedCommunity.id);
+                      if (!ghUser || !isOwned) return null;
+                      const repoUrl = `https://github.com/${ghUser}/${selectedCommunity.slug}`;
+                      return (
+                        <a
+                          href={repoUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded border border-neutral-200 dark:border-neutral-700 text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-100 hover:border-neutral-400 dark:hover:border-neutral-500 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-all active:scale-95"
+                          title={repoUrl}
+                        >
+                          See in GitHub ↗
+                        </a>
+                      );
+                    })()}
+                  </div>
                 </div>
                 <button
                   onClick={() => setSelectedCommunity(null)}

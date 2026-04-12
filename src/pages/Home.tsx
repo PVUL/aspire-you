@@ -250,7 +250,7 @@ export default function Home() {
       });
       if (res.ok) {
         setGithubConnected(false);
-        setGithubUsername(null);
+        setGithubUsername(undefined);
         patchGithubState({ connected: false, username: undefined, vaultUrl: undefined });
         setVaultMeta(null);
         setVaultStatus(null);
